@@ -13,9 +13,11 @@
 //! 4. `display` rules colour a map, protect nothing, and are never candidates.
 
 pub mod rules;
+pub mod scan;
 pub mod tokens;
 pub mod types;
 
 pub use rules::{compile, find_candidates, match_rule, Candidate, CompiledRule};
+pub use scan::{scan, ScanReport};
 pub use tokens::{default_tokens, expand, TokenMap};
 pub use types::{DirEntry, Rule, RuleMatch, Tier};

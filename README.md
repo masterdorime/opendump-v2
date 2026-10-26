@@ -28,20 +28,73 @@ directly is a plausibly sub-10-second operation, and that is a native-code probl
 
 ## What is here
 
-`crates/opendump-core` — the classifier, ported deliberately rather than transliterated.
+`crates/opendump-core` — the engine, ported deliberately rather than transliterated.
+`crates/opendump-cli` — a read-only command-line front end.
 
 | Module | Contents |
 | --- | --- |
 | `types` | `Tier`, `Rule`, `RuleMatch`, `DirEntry` |
 | `tokens` | `%LOCALAPPDATA%`-style expansion against an injectable map |
 | `rules` | rule compilation, AND matcher semantics, `find_candidates` |
-
-Everything is covered by tests that encode the same expectations as the TypeScript suite:
+| `scan` | recursive walk with recursive sizes and `package.json` detection |
 
 ```bash
-cargo test
-# 10 passed
+cargo test          # 13 tests: 10 for rules, 3 for the scanner
+cargo build --release
 ```
+
+### Try it
+
+```bash
+./target/release/opendump scan "C:\Users\you\AppData\Local" --top 20
+```
+
+```
+opendump 0.1.0 — rust core
+root      C:\Users\you\AppData\Local
+rules     rules/rules.json (80 loaded)
+
+folders   87,008
+files     551,683
+size      87.2 GB
+scan      21.96s  (3,963 folders/s)
+
+candidates (>= 1.0 MB exclusive)
+  SAFE_PURGE     4       8.7 GB
+  REVIEW         7      29.8 GB
+  KEEP          41      31.5 GB
+  LOCKED         0          0 B
+
+top 10 by reclaimed bytes
+  KEEP           14.6 GB  ...\CapCut  [holds 2.4 GB protected]
+  REVIEW          5.5 GB  ...\CapCut\User Data\Cache
+  SAFE_PURGE      6.2 GB  ...\npm-cache
+```
+
+**It is read-only.** There is no executor in this repository; nothing here removes or renames
+a file.
+
+### Measured against the Electron build
+
+| | v0.5 (Electron/JS) | v2 (Rust) |
+| --- | --- | --- |
+| Full `C:\` scan | 172 s idle / 299 s loaded | **102.8 s** |
+| Binary / install | 366 MB installed | **1.75 MB** |
+| Folders/sec | ~2,200 | ~3,530 |
+
+Same classifications: `CapCut\Cache` → REVIEW, `CapCut\Projects` → KEEP, `npm-cache` →
+SAFE_PURGE, and `CapCut` flagged as *holds 2.4 GB protected*.
+
+Verified against `robocopy /L` on four subtrees — `Users`, `Windows`, `ProgramData`,
+`Program Files` — all matched to within noise.
+
+> **Note on totals:** the full-drive sum is larger than the physical used space because hard
+> links (WinSxS ↔ WindowsApps) are counted per path. `robocopy` behaves identically. v2 also
+> counts `pagefile.sys` and `hiberfil.sys`, which v0.5 silently skipped — about 29 GB it was
+> under-reporting.
+
+`rules/rules.json` is copied verbatim from opendump v0.5 and must stay in sync until the two
+repositories merge. The rule data is the product; only the engine changed.
 
 ### The invariants this crate is built around
 
@@ -57,11 +110,13 @@ the language is not what makes opendump safe, the design is.
 
 ## What is not here yet
 
-- **Scanner** — filesystem walk, and later the MFT reader that motivates Rust in the first place
 - **Executor** — quarantine, restore, purge, journal
 - **Tauri shell** — window, IPC, UI
 - **AI layer** — Ollama provider, hardware gating
 - **`find_unclassified`** — the AI's target set
+- **The MFT scanner** — the current walk uses `read_dir`. Parsing `$MFT` directly is the next
+  step and the real reason for Rust; `scan.rs` is written so it can be replaced without touching
+  `rules.rs`.
 
 Nothing in this repository can delete a file. That is deliberate: the executor lands only after
 the scanner and its tests do.

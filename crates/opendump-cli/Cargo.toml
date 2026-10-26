@@ -1,0 +1,16 @@
+[package]
+name = "opendump-cli"
+description = "Command-line front end for the opendump Rust core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "opendump"
+path = "src/main.rs"
+
+[dependencies]
+opendump-core = { path = "../opendump-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
