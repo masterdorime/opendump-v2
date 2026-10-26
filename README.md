@@ -1,8 +1,8 @@
 # opendump v2
 
-> **Pre-alpha. This is not an app yet.** It is the deterministic core, rewritten in Rust.
-> The working release is still [opendump v0.5.0](https://github.com/masterdorime/opendump/releases) —
-> an Electron app that scans, classifies, quarantines and purges today.
+> **Pre-alpha.** The engine is complete and there is now a minimal desktop window. The supported
+> release is still [opendump v0.5.0](https://github.com/masterdorime/opendump/releases) — it has
+> the full UI, local AI, and an installer.
 
 This repository is the Rust rewrite of opendump's engine, heading for a Tauri shell. It exists
 separately because it is a different stack with a different build, and because the Electron app
@@ -136,17 +136,38 @@ repositories merge. The rule data is the product; only the engine changed.
 These are the same four guarantees the TypeScript engine enforces. Porting them was the point;
 the language is not what makes opendump safe, the design is.
 
+## Desktop shell
+
+`apps/desktop` is a Tauri 2 window — WebView2, no bundled Chromium.
+
+```bash
+cd apps/desktop
+npm install
+npx tauri dev      # hot reload
+npx tauri build    # release exe + NSIS installer
+```
+
+It is deliberately small: **5.7 KB of JavaScript, 3.8 KB of CSS**, no UI framework. The rule set
+is embedded in the binary at compile time with `include_str!`, so there is no runtime file to
+lose or mismatch.
+
+Today it can scan a drive, list candidates with their tier and reason, tick folders, quarantine
+them, restore, and purge — the same pipeline as the CLI, with checkboxes.
+
+It does **not** have the treemap, the guided tour, local AI, or the purge confirmation screen that
+names individual filenames. Those are v0.5 features that have not been ported yet.
+
 ## What is not here yet
 
-- **Tauri shell** — window, IPC, UI
+- **v0.5's UI** — treemap, spotlight tour, purge confirmation listing filenames, live memory meters
 - **AI layer** — Ollama provider, hardware gating
 - **`find_unclassified`** — the AI's target set
 - **The MFT scanner** — the current walk uses `read_dir`. Parsing `$MFT` directly is the next
   step and the real reason for Rust; `scan.rs` is written so it can be replaced without touching
   `rules.rs`.
 
-The engine is complete enough to scan, classify, quarantine, restore and purge from a terminal.
-What is missing is the part most people will want: a window.
+The engine is complete enough to scan, classify, quarantine, restore and purge from either a
+terminal or a window.
 
 ## Build
 

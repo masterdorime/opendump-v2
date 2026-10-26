@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/opendump-core", "crates/opendump-cli"]
+# The Tauri app is its own workspace: tauri-build wants an isolated target dir.
+exclude = ["apps/desktop/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
