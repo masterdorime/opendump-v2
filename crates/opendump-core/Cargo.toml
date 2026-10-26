@@ -1,0 +1,12 @@
+[package]
+name = "opendump-core"
+description = "Deterministic classification core for opendump: rule matching, exclusive sizing, monotonic protection."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
