@@ -4,7 +4,7 @@
 > release is still [opendump v0.5.0](https://github.com/masterdorime/opendump/releases) — it has
 > the full UI, local AI, and an installer.
 
-This repository is the Rust rewrite of opendump's engine, heading for a Tauri shell. It exists
+This repository is the Rust rewrite of opendump's engine, with a native window. It exists
 separately because it is a different stack with a different build, and because the Electron app
 should stay the supported release until this one can do the same job.
 
@@ -39,9 +39,10 @@ and `purge` require explicit confirmation flags.
 | `rules` | rule compilation, AND matcher semantics, `find_candidates` |
 | `scan` | recursive walk with recursive sizes and `package.json` detection |
 | `executor` | quarantine / restore / purge, journal-first |
+| `format` | byte and count formatting, shared by every front end |
 
 ```bash
-cargo test          # 24 tests: 10 rules, 3 scanner, 11 executor
+cargo test          # 26 tests: 10 rules, 3 scanner, 11 executor, 2 formatting
 cargo build --release
 ```
 
@@ -136,39 +137,19 @@ repositories merge. The rule data is the product; only the engine changed.
 These are the same four guarantees the TypeScript engine enforces. Porting them was the point;
 the language is not what makes opendump safe, the design is.
 
-## Desktop shell
+## Two front ends, one engine
 
-`apps/desktop` is a Tauri 2 window — WebView2, no bundled Chromium.
+| | v0.5 (Electron) | v2 native |
+| --- | --- | --- |
+| Rendered with | Chromium | **egui → GPU** |
+| Installer | 116.6 MB | — (raw exe 6.17 MB) |
+| Idle RAM | 377 MB | **89 MB, 1 process** |
+| RAM after a scan | — | 107 MB |
+| Full `C:\` scan | 172–299 s | **91.7 s** |
 
-```bash
-cd apps/desktop
-npm install
-npx tauri dev      # hot reload
-npx tauri build    # release exe + NSIS installer
-```
-
-It is deliberately small: **5.7 KB of JavaScript, 3.8 KB of CSS**, no UI framework. The rule set
-is embedded in the binary at compile time with `include_str!`, so there is no runtime file to
-lose or mismatch.
-
-Today it can scan a drive, list candidates with their tier and reason, tick folders, quarantine
-them, restore, and purge — the same pipeline as the CLI, with checkboxes.
-
-It does **not** have the treemap, the guided tour, local AI, or the purge confirmation screen that
-names individual filenames. Those are v0.5 features that have not been ported yet.
-
-## Three front ends, one engine
-
-| | v0.5 (Electron) | v2 Tauri | v2 native |
-| --- | --- | --- | --- |
-| Rendered with | Chromium | WebView2 | **egui → GPU** |
-| Installer | 116.6 MB | 2.26 MB | — (raw exe 6.17 MB) |
-| Idle RAM | 377 MB | ~344 MB, 13 processes | **89 MB, 1 process** |
-| RAM after a scan | — | — | 107 MB |
-| Full `C:\` scan | 172–299 s | 165 s | **91.7 s** |
-
-`apps/native` is the same window without a browser runtime. That is the whole difference: the
-webview costs ~316 MB before the app draws anything.
+`apps/native` draws the same four regions — bar, summary, review list, quarantine — straight
+to the GPU. There is no browser runtime, which is the whole difference: the webview alone costs
+~316 MB before the app draws anything.
 
 ```bash
 cd apps/native
@@ -177,9 +158,12 @@ cargo run --release -- --scan       # scan immediately on open
 cargo run --release -- --selftest   # headless: scan, classify, print, exit
 ```
 
+Purge is armed rather than immediate: the button reads "Purge all", then "Confirm: delete 12.4
+GB?" on the second click. Deleting staged data is the one action with no undo.
+
 What it is not: egui's stock widgets do not match a hand-styled CSS interface pixel for pixel,
-and the treemap, guided tour and purge-confirmation screen are still only in v0.5. The look is
-close — same palette, same rows, same tier colours — but it is a reimplementation, not a port.
+and the treemap, guided tour and filename-by-filename confirmation are still only in v0.5. The
+look is close — same palette, same rows, same tier colours — but it is a reimplementation.
 
 ## What is not here yet
 
@@ -196,7 +180,7 @@ terminal or a window.
 ## Build
 
 ```bash
-cargo test                      # 10 tests
+cargo test                      # 26 tests (workspace)
 cargo build --release
 ```
 

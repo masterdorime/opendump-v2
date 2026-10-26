@@ -55,10 +55,10 @@ fn matchers_on_a_rule_are_anded() {
     let compiled = compile(&rules, &default_tokens());
 
     let inside = match_rule("C:\\Program Files\\Adobe\\js\\node_modules", 100 * MB, &compiled, true);
-    assert_eq!(inside.map(|r| r.id.as_str()), Some("keep-installed-modules"));
+    assert_eq!(inside.map(|i| compiled[i].id.as_str()), Some("keep-installed-modules"));
 
     let project = match_rule("C:\\work\\proj\\node_modules", 100 * MB, &compiled, true);
-    assert_eq!(project.map(|r| r.id.as_str()), Some("purge-modules"));
+    assert_eq!(project.map(|i| compiled[i].id.as_str()), Some("purge-modules"));
 
     // The prefix alone must not match: a name matcher is also declared.
     let other = match_rule("C:\\Program Files\\something-else", 100 * MB, &compiled, true);
@@ -115,7 +115,6 @@ fn a_parent_only_reports_bytes_its_children_do_not_claim() {
     let find = |path: &str| candidates.iter().find(|c| c.path.eq_ignore_ascii_case(path)).cloned();
 
     let a = find("C:\\A").expect("A is a candidate");
-    assert_eq!(a.total_size, 600 * MB);
     assert_eq!(a.size, 50 * MB, "A only owns what its children do not");
 
     assert_eq!(find("C:\\A\\cache").unwrap().size, 400 * MB);

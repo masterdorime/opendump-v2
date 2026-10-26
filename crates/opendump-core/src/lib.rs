@@ -13,6 +13,7 @@
 //! 4. `display` rules colour a map, protect nothing, and are never candidates.
 
 pub mod executor;
+pub mod format;
 pub mod rules;
 pub mod scan;
 pub mod tokens;
@@ -22,6 +23,7 @@ pub use executor::{
     list_quarantine, purge, quarantine, restore, staged_path_for, BatchResult, ExecItem,
     ExecOptions, ExecResult, ExecStatus, QuarantineItem, QuarantineStatus,
 };
+pub use format::{bytes, thousands};
 pub use rules::{compile, find_candidates, match_rule, Candidate, CompiledRule};
 pub use scan::{scan, ScanReport};
 pub use tokens::{default_tokens, expand, TokenMap};

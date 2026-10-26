@@ -15,8 +15,9 @@ use eframe::egui::{self, Color32, RichText};
 use serde::Deserialize;
 
 use opendump_core::{
-    compile, default_tokens, find_candidates, list_quarantine, match_rule, purge, quarantine,
-    restore, scan, Candidate, CompiledRule, ExecItem, ExecOptions, Rule, Tier,
+    bytes, compile, default_tokens, find_candidates, list_quarantine, match_rule, purge,
+    quarantine, restore, scan, thousands, Candidate, CompiledRule, ExecItem, ExecOptions, Rule,
+    Tier,
 };
 
 const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/rules.json"));
@@ -61,7 +62,6 @@ struct StagedView {
 enum Message {
     Started,
     Done(ScanView),
-    Failed(String),
     Staged(Vec<StagedView>),
     Action(String),
 }
@@ -121,8 +121,9 @@ fn classify(path: &str, compiled: &[CompiledRule]) -> Result<(ExecItem, String),
         .map(|parent| parent.join("package.json").is_file())
         .unwrap_or(false);
 
-    let rule = match_rule(path, size, compiled, parent_has_pkg)
+    let rule_index = match_rule(path, size, compiled, parent_has_pkg)
         .ok_or_else(|| "no rule classifies this folder".to_string())?;
+    let rule = &compiled[rule_index];
 
     if rule.tier != Tier::SafePurge && rule.tier != Tier::Review {
         return Err(format!("classified {} by {}", rule.tier.as_str(), rule.id));
@@ -149,6 +150,7 @@ struct App {
     scan: Option<ScanView>,
     picked: std::collections::HashSet<String>,
     staged: Vec<StagedView>,
+    confirm_purge: bool,
     toast: Option<(String, Instant)>,
 }
 
@@ -162,6 +164,7 @@ impl App {
             scan: None,
             picked: Default::default(),
             staged: staged_snapshot(),
+            confirm_purge: false,
             toast: None,
         }
     }
@@ -299,11 +302,10 @@ impl App {
                     self.picked.clear();
                     self.scan = Some(view);
                 }
-                Message::Failed(error) => {
-                    self.scanning = false;
-                    self.toast = Some((error, Instant::now()));
+                Message::Staged(items) => {
+                    self.staged = items;
+                    self.confirm_purge = false;
                 }
-                Message::Staged(items) => self.staged = items,
                 Message::Action(text) => self.toast = Some((text, Instant::now())),
             }
         }
@@ -312,21 +314,6 @@ impl App {
 
 // ------------------------------------------------------------------- helpers
 
-const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-
-fn bytes(value: u64) -> String {
-    let mut size = value as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{value} B")
-    } else {
-        format!("{size:.1} {}", UNITS[unit])
-    }
-}
 
 fn pretty(path: &str) -> String {
     let home = std::env::var("USERPROFILE").unwrap_or_default();
@@ -696,11 +683,28 @@ impl App {
             ui.label(RichText::new("QUARANTINE").size(10.5).color(MUTED));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enabled = active_count > 0;
+                let label = if self.confirm_purge {
+                    format!("Confirm: delete {}?", bytes(total))
+                } else {
+                    "Purge all".to_string()
+                };
+                let fill = if self.confirm_purge {
+                    Color32::from_rgb(0x7f, 0x1d, 0x1d)
+                } else {
+                    Color32::from_rgb(0x3a, 0x14, 0x14)
+                };
                 if ui
-                    .add_enabled(enabled, egui::Button::new("Purge all").fill(Color32::from_rgb(0x3a, 0x14, 0x14)))
+                    .add_enabled(enabled, egui::Button::new(RichText::new(label).color(Color32::from_rgb(0xfc, 0xa5, 0xa5))).fill(fill))
                     .clicked()
                 {
-                    self.purge_all(ctx);
+                    if self.confirm_purge {
+                        self.confirm_purge = false;
+                        self.purge_all(ctx);
+                    } else {
+                        // Deleting staged data is irreversible; a single click is
+                        // not enough, so the button arms first.
+                        self.confirm_purge = true;
+                    }
                 }
                 if ui.add_enabled(enabled, egui::Button::new("Restore all")).clicked() {
                     self.restore_all(ctx);
@@ -767,17 +771,6 @@ fn stat_colored(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
     ui.add_space(16.0);
 }
 
-fn thousands(value: u64) -> String {
-    let digits = value.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
 
 // ------------------------------------------------------------------- selftest
 

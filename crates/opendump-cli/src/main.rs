@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use opendump_core::{
-    compile, default_tokens, find_candidates, list_quarantine, match_rule, purge, quarantine,
-    restore, scan, Candidate, ExecItem, ExecOptions, Rule, Tier,
+    bytes, compile, default_tokens, find_candidates, list_quarantine, match_rule, purge,
+    quarantine, restore, scan, thousands, Candidate, ExecItem, ExecOptions, Rule, Tier,
 };
 
 #[derive(serde::Deserialize)]
@@ -208,11 +208,11 @@ fn quarantine_command(raw: &[String]) -> ExitCode {
             .map(|parent| parent.join("package.json").is_file())
             .unwrap_or(false);
 
-        let rule = match_rule(raw_path, size, &compiled, parent_has_pkg);
-        let Some(rule) = rule else {
+        let Some(rule_index) = match_rule(raw_path, size, &compiled, parent_has_pkg) else {
             refusals.push(format!("{raw_path}: no rule classifies this folder"));
             continue;
         };
+        let rule = &compiled[rule_index];
 
         let accepted = rule.tier == Tier::SafePurge
             || (allow_review && rule.tier == Tier::Review);
@@ -314,7 +314,7 @@ fn list_command(raw: &[String]) -> ExitCode {
             "{:<38} {:<12} {:>10}  {}",
             item.id,
             item.status.as_str(),
-            bytes_opt(item.bytes),
+            bytes(item.bytes),
             item.src
         );
     }
@@ -509,33 +509,4 @@ fn fail(message: &str) -> ExitCode {
     ExitCode::from(1)
 }
 
-fn bytes_opt(value: u64) -> String {
-    bytes(value)
-}
 
-fn bytes(value: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut size = value as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{value} B")
-    } else {
-        format!("{size:.1} {}", UNITS[unit])
-    }
-}
-
-fn thousands(value: u64) -> String {
-    let digits = value.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}

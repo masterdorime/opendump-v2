@@ -65,7 +65,6 @@ pub struct DirEntry {
     pub path: String,
     pub size: u64,
     pub files: u64,
-    pub mtime_ms: i64,
     pub has_package_json: bool,
 }
 
@@ -75,13 +74,7 @@ impl DirEntry {
             path: path.into(),
             size,
             files: 0,
-            mtime_ms: 0,
             has_package_json: false,
         }
-    }
-
-    pub fn with_package_json(mut self, value: bool) -> Self {
-        self.has_package_json = value;
-        self
     }
 }

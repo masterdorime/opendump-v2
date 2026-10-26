@@ -7,9 +7,9 @@
 //! reason this project exists in Rust — replaces this module without touching
 //! `rules.rs`. That is the boundary worth preserving.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use crate::rules::normalize;
 use crate::types::DirEntry;
@@ -50,7 +50,6 @@ struct Record {
     path: String,
     bytes: u64,
     files: u64,
-    mtime_ms: i64,
     has_package_json: bool,
 }
 
@@ -75,7 +74,6 @@ pub fn scan(root: &Path) -> ScanReport {
 
         let mut bytes = 0u64;
         let mut files = 0u64;
-        let mut mtime_ms = 0i64;
         let mut has_package_json = false;
 
         for entry in entries.flatten() {
@@ -116,9 +114,6 @@ pub fn scan(root: &Path) -> ScanReport {
             if let Ok(metadata) = entry.metadata() {
                 bytes += metadata.len();
                 files += 1;
-                if let Ok(modified) = metadata.modified() {
-                    mtime_ms = mtime_ms.max(to_unix_ms(modified));
-                }
             }
         }
 
@@ -128,7 +123,6 @@ pub fn scan(root: &Path) -> ScanReport {
             path: path_string,
             bytes,
             files,
-            mtime_ms,
             has_package_json,
         });
     }
@@ -146,10 +140,9 @@ pub fn scan(root: &Path) -> ScanReport {
         let Some(&parent_index) = index.get(&normalize(&parent)) else {
             continue;
         };
-        let (bytes, files, mtime) = (records[i].bytes, records[i].files, records[i].mtime_ms);
-        records[parent_index].bytes += bytes;
-        records[parent_index].files += files;
-        records[parent_index].mtime_ms = records[parent_index].mtime_ms.max(mtime);
+        let extra = (records[i].bytes, records[i].files);
+        records[parent_index].bytes += extra.0;
+        records[parent_index].files += extra.1;
     }
 
     let dirs: Vec<DirEntry> = records
@@ -158,7 +151,6 @@ pub fn scan(root: &Path) -> ScanReport {
             path: r.path.clone(),
             size: r.bytes,
             files: r.files,
-            mtime_ms: r.mtime_ms,
             has_package_json: r.has_package_json,
         })
         .collect();
@@ -192,16 +184,3 @@ fn is_profile_root(dir: &Path) -> bool {
     parts.len() == 3 && parts[1] == "users"
 }
 
-fn to_unix_ms(time: SystemTime) -> i64 {
-    match time.duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_millis() as i64,
-        Err(_) => 0,
-    }
-}
-
-/// Unused today; kept because the MFT reader will need the same de-duplication
-/// when it starts from a raw volume instead of a path.
-#[allow(dead_code)]
-fn dedupe(paths: Vec<String>) -> HashSet<String> {
-    paths.into_iter().map(|p| normalize(&p)).collect()
-}

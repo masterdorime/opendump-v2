@@ -25,15 +25,8 @@ pub struct Candidate {
     pub path: String,
     /// Bytes attributable to this folder excluding nested candidates.
     pub size: u64,
-    /// Recursive size of the whole folder.
-    pub total_size: u64,
-    pub files: u64,
-    pub mtime_ms: i64,
     pub tier: Tier,
-    pub category: String,
     pub reason: String,
-    pub rule_id: String,
-    pub depth: usize,
     /// True when this folder contains data that must not be removed wholesale.
     pub blocked: bool,
     pub blocked_bytes: u64,
@@ -60,15 +53,19 @@ pub fn compile(rules: &[Rule], tokens: &TokenMap) -> Vec<CompiledRule> {
 }
 
 /// Every matcher a rule declares must pass. A rule with no matcher never fires.
-pub fn match_rule<'a>(
+///
+/// Returns the rule's index rather than a reference: callers immediately need to
+/// compare rules by identity, and a reference tempts them into a linear scan by
+/// id — which is what this used to do, per matched folder.
+pub fn match_rule(
     path: &str,
     size: u64,
-    rules: &'a [CompiledRule],
+    rules: &[CompiledRule],
     parent_has_package_json: bool,
-) -> Option<&'a CompiledRule> {
+) -> Option<usize> {
     let normalized = normalize(path);
 
-    for rule in rules {
+    for (index, rule) in rules.iter().enumerate() {
         if let Some(min) = rule.min_bytes {
             if size < min {
                 continue;
@@ -85,7 +82,8 @@ pub fn match_rule<'a>(
 
         if let Some(prefix) = &rule.prefix {
             has_matcher = true;
-            ok = normalized == *prefix || normalized.starts_with(&format!("{prefix}\\"))
+            ok = normalized == *prefix
+                || normalized.starts_with(&format!("{prefix}\\"))
                 || normalized.starts_with(&format!("{prefix}/"));
         }
         if ok {
@@ -102,7 +100,7 @@ pub fn match_rule<'a>(
         }
 
         if has_matcher && ok {
-            return Some(rule);
+            return Some(index);
         }
     }
 
@@ -138,19 +136,18 @@ pub fn find_candidates(dirs: &[DirEntry], rules: &[CompiledRule], min_exclusive:
             .map(|p| pkg_paths.contains(&normalize(&p)))
             .unwrap_or(false);
 
-        let Some(rule) = match_rule(&d.path, d.size, rules, parent_has_pkg) else {
+        let Some(rule_index) = match_rule(&d.path, d.size, rules, parent_has_pkg) else {
             continue;
         };
         let key = normalize(&d.path);
 
-        let same_rule_above = nearest_matched(&matched, &key)
-            .map(|ancestor| matched[&ancestor] == rule_index(rules, &rule.id))
-            .unwrap_or(false);
-        if same_rule_above {
-            continue;
+        if let Some(ancestor) = nearest_matched(&matched, &key) {
+            if matched[&ancestor] == rule_index {
+                continue;
+            }
         }
 
-        matched.insert(key, rule_index(rules, &rule.id));
+        matched.insert(key, rule_index);
     }
 
     // 2. Fold sizes upward. Deepest first, so a child is accounted for before
@@ -226,11 +223,7 @@ pub fn find_candidates(dirs: &[DirEntry], rules: &[CompiledRule], min_exclusive:
         out.push(Candidate {
             path: d.path.clone(),
             size: own,
-            total_size: d.size,
-            files: d.files,
-            mtime_ms: d.mtime_ms,
             tier: if blocked { Tier::Keep } else { rule.tier },
-            category: rule.category.clone(),
             reason: if blocked {
                 format!(
                     "{} — but it also contains {} protected item(s), so it cannot be removed as a whole.",
@@ -240,8 +233,6 @@ pub fn find_candidates(dirs: &[DirEntry], rules: &[CompiledRule], min_exclusive:
             } else {
                 rule.reason.clone()
             },
-            rule_id: rule.id.clone(),
-            depth: depth_of(&d.path),
             blocked,
             blocked_bytes: prot,
             blocked_by: blocked_paths,
@@ -250,10 +241,6 @@ pub fn find_candidates(dirs: &[DirEntry], rules: &[CompiledRule], min_exclusive:
 
     out.sort_by(|a, b| b.size.cmp(&a.size));
     out
-}
-
-fn rule_index(rules: &[CompiledRule], id: &str) -> usize {
-    rules.iter().position(|r| r.id == id).unwrap_or(usize::MAX)
 }
 
 fn nearest_matched(matched: &HashMap<String, usize>, path: &str) -> Option<String> {
