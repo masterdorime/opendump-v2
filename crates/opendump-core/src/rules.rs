@@ -268,7 +268,9 @@ fn nearest_matched(matched: &HashMap<String, usize>, path: &str) -> Option<Strin
 }
 
 pub(crate) fn normalize(path: &str) -> String {
-    path.trim_end_matches(['\\', '/']).to_ascii_lowercase()
+    path.trim_end_matches(['\\', '/'])
+        .replace('/', "\\")
+        .to_ascii_lowercase()
 }
 
 fn base_name(path: &str) -> &str {
@@ -276,11 +278,13 @@ fn base_name(path: &str) -> &str {
 }
 
 pub(crate) fn depth_of(path: &str) -> usize {
-    path.bytes().filter(|b| *b == b'\\').count()
+    path.bytes().filter(|b| *b == b'\\' || *b == b'/').count()
 }
 
 pub(crate) fn parent_of(path: &str) -> Option<String> {
-    let trimmed = path.trim_end_matches(['\\', '/']);
+    // Windows accepts both separators, and a CLI user may type either.
+    let unified = path.replace('/', "\\");
+    let trimmed = unified.trim_end_matches('\\');
     let bytes = trimmed.as_bytes();
     if bytes.len() <= 2 && bytes.get(1) == Some(&b':') {
         return None; // drive root

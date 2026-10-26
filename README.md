@@ -29,7 +29,8 @@ directly is a plausibly sub-10-second operation, and that is a native-code probl
 ## What is here
 
 `crates/opendump-core` — the engine, ported deliberately rather than transliterated.
-`crates/opendump-cli` — a read-only command-line front end.
+`crates/opendump-cli` — a command-line front end. `scan` is read-only; `quarantine`, `restore`
+and `purge` require explicit confirmation flags.
 
 | Module | Contents |
 | --- | --- |
@@ -37,9 +38,10 @@ directly is a plausibly sub-10-second operation, and that is a native-code probl
 | `tokens` | `%LOCALAPPDATA%`-style expansion against an injectable map |
 | `rules` | rule compilation, AND matcher semantics, `find_candidates` |
 | `scan` | recursive walk with recursive sizes and `package.json` detection |
+| `executor` | quarantine / restore / purge, journal-first |
 
 ```bash
-cargo test          # 13 tests: 10 for rules, 3 for the scanner
+cargo test          # 24 tests: 10 rules, 3 scanner, 11 executor
 cargo build --release
 ```
 
@@ -71,8 +73,34 @@ top 10 by reclaimed bytes
   SAFE_PURGE      6.2 GB  ...\npm-cache
 ```
 
-**It is read-only.** There is no executor in this repository; nothing here removes or renames
-a file.
+**It is read-only.** `scan` never removes, renames or writes anything.
+
+### Cleaning (two deliberate steps)
+
+```bash
+opendump quarantine "$LOCALAPPDATA\Temp\some-cache"        # prints the plan, does nothing
+opendump quarantine "$LOCALAPPDATA\Temp\some-cache" --yes  # moves it into quarantine
+opendump list                                              # what is staged
+opendump restore --all                                     # undo
+opendump purge --all --yes                                 # reclaim the space
+```
+
+The guards, in order:
+
+- **`quarantine` refuses any folder the rules do not classify as removable.** It re-classifies
+  the path you gave it and prints which rule decided. A folder that only matches the broad
+  `KEEP` catch-all is refused:
+
+  ```
+  refused  C:\Users\you\some-folder: classified KEEP by keep-profile
+  ```
+
+- **`--allow-review`** is required to accept `REVIEW` folders; nothing accepts `KEEP` or
+  `LOCKED`, and the executor refuses those tiers again independently.
+- **Nothing happens without `--yes`.** Both `quarantine` and `purge` print their plan and exit 1.
+- **Purge is irreversible.** It prints the byte count and refuses without `--yes`.
+- Cross-volume moves are refused: the destination must share the source's volume, because a move
+  must be a rename.
 
 ### Measured against the Electron build
 
@@ -110,7 +138,6 @@ the language is not what makes opendump safe, the design is.
 
 ## What is not here yet
 
-- **Executor** — quarantine, restore, purge, journal
 - **Tauri shell** — window, IPC, UI
 - **AI layer** — Ollama provider, hardware gating
 - **`find_unclassified`** — the AI's target set
@@ -118,8 +145,8 @@ the language is not what makes opendump safe, the design is.
   step and the real reason for Rust; `scan.rs` is written so it can be replaced without touching
   `rules.rs`.
 
-Nothing in this repository can delete a file. That is deliberate: the executor lands only after
-the scanner and its tests do.
+The engine is complete enough to scan, classify, quarantine, restore and purge from a terminal.
+What is missing is the part most people will want: a window.
 
 ## Build
 
