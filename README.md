@@ -157,6 +157,30 @@ them, restore, and purge — the same pipeline as the CLI, with checkboxes.
 It does **not** have the treemap, the guided tour, local AI, or the purge confirmation screen that
 names individual filenames. Those are v0.5 features that have not been ported yet.
 
+## Three front ends, one engine
+
+| | v0.5 (Electron) | v2 Tauri | v2 native |
+| --- | --- | --- | --- |
+| Rendered with | Chromium | WebView2 | **egui → GPU** |
+| Installer | 116.6 MB | 2.26 MB | — (raw exe 6.17 MB) |
+| Idle RAM | 377 MB | ~344 MB, 13 processes | **89 MB, 1 process** |
+| RAM after a scan | — | — | 107 MB |
+| Full `C:\` scan | 172–299 s | 165 s | **91.7 s** |
+
+`apps/native` is the same window without a browser runtime. That is the whole difference: the
+webview costs ~316 MB before the app draws anything.
+
+```bash
+cd apps/native
+cargo run --release                 # the window
+cargo run --release -- --scan       # scan immediately on open
+cargo run --release -- --selftest   # headless: scan, classify, print, exit
+```
+
+What it is not: egui's stock widgets do not match a hand-styled CSS interface pixel for pixel,
+and the treemap, guided tour and purge-confirmation screen are still only in v0.5. The look is
+close — same palette, same rows, same tier colours — but it is a reimplementation, not a port.
+
 ## What is not here yet
 
 - **v0.5's UI** — treemap, spotlight tour, purge confirmation listing filenames, live memory meters
