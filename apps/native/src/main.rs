@@ -15,9 +15,9 @@ use eframe::egui::{self, Color32, RichText};
 use serde::Deserialize;
 
 use opendump_core::{
-    bytes, compile, default_tokens, find_candidates, inspect_staged, list_quarantine, match_rule,
-    parent_of, purge, quarantine, restore, scan, squarify, thousands, Box4, Candidate, CompiledRule,
-    ExecItem, ExecOptions, Rule, StagedDetail, Tier,
+    bytes, compile, default_tokens, find_candidates, hardware, inspect_staged, list_quarantine,
+    match_rule, parent_of, purge, quarantine, restore, scan, squarify, thousands, Box4, Candidate,
+    CompiledRule, ExecItem, ExecOptions, Memory, Rule, StagedDetail, Tier,
 };
 
 const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/rules.json"));
@@ -91,6 +91,7 @@ enum Message {
     Done(ScanView),
     Staged(Vec<StagedView>),
     Action(String),
+    Memory(Memory),
 }
 
 fn base_dir() -> PathBuf {
@@ -190,6 +191,8 @@ struct App {
     pane: Pane,
     /// Current treemap root; `None` means the scan root.
     zoom: Option<String>,
+    mem: Memory,
+    probe_started: bool,
 }
 
 impl App {
@@ -206,6 +209,8 @@ impl App {
             toast: None,
             pane: Pane::Map,
             zoom: None,
+            mem: Memory::default(),
+            probe_started: false,
         }
     }
 
@@ -385,6 +390,7 @@ impl App {
                 }
                 Message::Staged(items) => self.staged = items,
                 Message::Action(text) => self.toast = Some((text, Instant::now())),
+                Message::Memory(memory) => self.mem = memory,
             }
         }
     }
@@ -399,6 +405,67 @@ fn pretty(path: &str) -> String {
         return format!("~{}", &path[home.len()..]);
     }
     path.to_string()
+}
+
+/// Poll memory off the UI thread.
+///
+/// RAM is one syscall; VRAM is a subprocess, so it refreshes every fourth poll
+/// (about six seconds) instead of every frame.
+fn spawn_probe(sender: Sender<Message>, ctx: egui::Context) {
+    std::thread::spawn(move || {
+        let mut gpu = hardware::query_gpu();
+        let mut tick = 0u32;
+
+        loop {
+            let mut memory = hardware::memory();
+            memory.gpu = gpu.clone();
+
+            if sender.send(Message::Memory(memory)).is_err() {
+                return; // window closed
+            }
+            ctx.request_repaint();
+
+            tick = tick.wrapping_add(1);
+            if tick % 4 == 0 {
+                gpu = hardware::query_gpu();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+    });
+}
+
+/// One memory readout. An unmeasurable value prints an em dash: a blank is
+/// honest, a guessed number is not.
+fn metric(ui: &mut egui::Ui, label: &str, values: Option<(u64, u64)>) {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+    let (text, color) = match values {
+        Some((free, total)) if total > 0 => {
+            let used = total.saturating_sub(free);
+            let headroom = free as f32 / total as f32;
+            let color = if headroom < 0.10 {
+                LOCKED
+            } else if headroom < 0.25 {
+                REVIEW
+            } else {
+                MUTED
+            };
+            (
+                format!("{:.1}/{:.1} GB", used as f64 / GB, total as f64 / GB),
+                color,
+            )
+        }
+        _ => ("—".to_string(), DIM),
+    };
+
+    // One widget, not a nested `vertical`: inside a right-to-left layout a
+    // nested block inherits almost no width and wraps to one character per line.
+    ui.label(
+        RichText::new(format!("{label} {text}"))
+            .size(10.0)
+            .color(color)
+            .monospace(),
+    );
 }
 
 fn file_name(path: &str) -> String {
@@ -537,6 +604,14 @@ fn install_style(ctx: &egui::Context) {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain();
+
+        // The probe needs a context to request repaints, which does not exist
+        // until the first frame.
+        if !self.probe_started {
+            self.probe_started = true;
+            spawn_probe(self.sender.clone(), ctx.clone());
+        }
+
         if self.scanning {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
@@ -580,6 +655,18 @@ impl eframe::App for App {
                         if ui.add_enabled(!self.scanning, button).clicked() {
                             self.start_scan(ctx);
                         }
+
+                        ui.add_space(18.0);
+                        metric(
+                            ui,
+                            "vram",
+                            self.mem
+                                .gpu
+                                .as_ref()
+                                .map(|gpu| (gpu.vram_free, gpu.vram_total)),
+                        );
+                        ui.add_space(14.0);
+                        metric(ui, "ram", Some((self.mem.ram_free, self.mem.ram_total)));
                     });
                 });
             });
@@ -1299,8 +1386,31 @@ fn stat_colored(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
 
 // ------------------------------------------------------------------- selftest
 
+/// Hardware readout. `--probe` prints this without scanning 400 GB first.
+fn print_memory() {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+    let memory = hardware::memory();
+    println!(
+        "ram       {:.1} GB free of {:.1} GB",
+        memory.ram_free as f64 / GB,
+        memory.ram_total as f64 / GB
+    );
+
+    match hardware::query_gpu() {
+        Some(gpu) => println!(
+            "gpu       {} · {:.1} GB free of {:.1} GB",
+            gpu.name,
+            gpu.vram_free as f64 / GB,
+            gpu.vram_total as f64 / GB
+        ),
+        None => println!("gpu       no NVIDIA adapter could be queried (vram left unknown)"),
+    }
+}
+
 fn selftest() {
     let root = default_drive();
+    print_memory();
     println!("scanning {root} …");
     let started = Instant::now();
     let report = scan(Path::new(&root));
@@ -1332,6 +1442,11 @@ fn selftest() {
 // ----------------------------------------------------------------------- main
 
 fn main() -> eframe::Result<()> {
+    if std::env::args().any(|arg| arg == "--probe") {
+        print_memory();
+        return Ok(());
+    }
+
     if std::env::args().any(|arg| arg == "--selftest") {
         selftest();
         return Ok(());
