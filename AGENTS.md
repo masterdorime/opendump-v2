@@ -8,7 +8,8 @@ anything; it records the invariants and the traps that already cost time once.
 app that is still the shipped product (v0.5.0, 5 releases). This repo has **no release** and
 should not be handed to a user as their daily driver yet: no treemap, no tour, no AI.
 
-**Last updated:** 2026-10-27 · HEAD `90ea880` · working tree clean · CI green.
+**Last updated:** 2026-10-27 · last code commit `90ea880` (docs commits follow) · working tree
+clean · CI green.
 
 ---
 
