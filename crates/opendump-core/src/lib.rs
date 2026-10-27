@@ -14,6 +14,7 @@
 
 pub mod executor;
 pub mod format;
+pub mod layout;
 pub mod rules;
 pub mod scan;
 pub mod tokens;
@@ -24,7 +25,8 @@ pub use executor::{
     ExecItem, ExecOptions, ExecResult, ExecStatus, QuarantineItem, QuarantineStatus, StagedDetail,
 };
 pub use format::{bytes, thousands};
-pub use rules::{compile, find_candidates, match_rule, Candidate, CompiledRule};
+pub use layout::{squarify, Box4};
+pub use rules::{compile, depth_of, find_candidates, match_rule, parent_of, Candidate, CompiledRule};
 pub use scan::{scan, ScanReport};
 pub use tokens::{default_tokens, expand, TokenMap};
 pub use types::{DirEntry, Rule, RuleMatch, Tier};

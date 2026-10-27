@@ -1,5 +1,6 @@
 use opendump_core::{
-    compile, default_tokens, find_candidates, match_rule, DirEntry, Rule, RuleMatch, Tier,
+    compile, default_tokens, depth_of, find_candidates, match_rule, parent_of, DirEntry, Rule,
+    RuleMatch, Tier,
 };
 
 const MB: u64 = 1024 * 1024;
@@ -229,4 +230,31 @@ fn the_shipped_rule_shape_deserialises() {
     assert_eq!(parsed.rules[0].requires_sibling.as_deref(), Some("package.json"));
     assert_eq!(parsed.rules[1].tier, Tier::Locked);
     assert_eq!(parsed.rules[1].matcher.prefix.as_deref(), Some("%WINDIR%\\WinSxS"));
+}
+
+#[test]
+fn parent_of_handles_drive_roots_and_both_separators() {
+    // The treemap groups directories by parent, so these edges are load-bearing.
+    assert_eq!(parent_of("C:\\"), None);
+    assert_eq!(parent_of("C:"), None);
+    assert_eq!(parent_of("C:\\Users"), Some("C:\\".to_string()));
+    assert_eq!(parent_of("C:\\Users\\you"), Some("C:\\Users".to_string()));
+
+    // Users paste forward slashes; the separator is normalised rather than missed.
+    assert_eq!(parent_of("C:/Users/you"), Some("C:\\Users".to_string()));
+    assert_eq!(parent_of("C:\\Users\\you\\"), Some("C:\\Users".to_string()));
+}
+
+#[test]
+fn depth_of_is_a_separator_count_not_a_level_number() {
+    // It exists to order ancestors before descendants, so equal counts at the
+    // drive root (`C:\`) and its direct child (`C:\Users`) are fine. Assert the
+    // real behaviour rather than an idealised one: the treemap does not use it.
+    assert_eq!(depth_of("C:\\"), 1);
+    assert_eq!(depth_of("C:\\Users"), 1);
+    assert_eq!(depth_of("C:/Users/you"), 2);
+    assert_eq!(depth_of("C:\\Users\\you"), 2);
+
+    // The ordering property that actually matters.
+    assert!(depth_of("C:\\Users\\you") > depth_of("C:\\Users"));
 }

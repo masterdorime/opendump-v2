@@ -264,11 +264,11 @@ fn base_name(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
-pub(crate) fn depth_of(path: &str) -> usize {
+pub fn depth_of(path: &str) -> usize {
     path.bytes().filter(|b| *b == b'\\' || *b == b'/').count()
 }
 
-pub(crate) fn parent_of(path: &str) -> Option<String> {
+pub fn parent_of(path: &str) -> Option<String> {
     // Windows accepts both separators, and a CLI user may type either.
     let unified = path.replace('/', "\\");
     let trimmed = unified.trim_end_matches('\\');

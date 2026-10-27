@@ -16,8 +16,8 @@ use serde::Deserialize;
 
 use opendump_core::{
     bytes, compile, default_tokens, find_candidates, inspect_staged, list_quarantine, match_rule,
-    purge, quarantine, restore, scan, thousands, Candidate, CompiledRule, ExecItem, ExecOptions,
-    Rule, StagedDetail, Tier,
+    parent_of, purge, quarantine, restore, scan, squarify, thousands, Box4, Candidate, CompiledRule,
+    ExecItem, ExecOptions, Rule, StagedDetail, Tier,
 };
 
 const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/rules.json"));
@@ -43,6 +43,30 @@ struct RulesDocument {
     rules: Vec<Rule>,
 }
 
+/// One directory as the map sees it: recursive size, file count, and the tier a
+/// rule gave it (if any). Deliberately smaller than `DirEntry` — the map keeps
+/// tens of thousands of these.
+struct NodeInfo {
+    size: u64,
+    files: u64,
+    tier: Option<Tier>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pane {
+    Map,
+    Review,
+}
+
+/// A laid-out rectangle in the treemap.
+struct Tile {
+    path: Option<String>,
+    label: String,
+    size: u64,
+    tier: Option<Tier>,
+    rect: egui::Rect,
+}
+
 struct ScanView {
     root: String,
     folders: u64,
@@ -50,6 +74,9 @@ struct ScanView {
     bytes: u64,
     duration: f64,
     candidates: Vec<Candidate>,
+    nodes: std::collections::HashMap<String, NodeInfo>,
+    /// parent path -> child paths, largest first.
+    levels: std::collections::HashMap<String, Vec<String>>,
 }
 
 struct StagedView {
@@ -160,6 +187,9 @@ struct App {
     staged: Vec<StagedView>,
     confirm: Option<ConfirmState>,
     toast: Option<(String, Instant)>,
+    pane: Pane,
+    /// Current treemap root; `None` means the scan root.
+    zoom: Option<String>,
 }
 
 impl App {
@@ -174,6 +204,8 @@ impl App {
             staged: staged_snapshot(),
             confirm: None,
             toast: None,
+            pane: Pane::Map,
+            zoom: None,
         }
     }
 
@@ -193,6 +225,49 @@ impl App {
             let compiled = rules();
             let candidates = find_candidates(&report.dirs, &compiled, 1024 * 1024);
 
+            // The scanner returns a flat list; the map needs a tree. Prune before
+            // grouping: a full C:\ is ~368k directories, and a 2 MB floor keeps
+            // the retained set small without losing any parent's total, because
+            // a parent is always at least as large as each of its children.
+            let floor = (report.total_bytes / 200_000).max(2 * 1024 * 1024);
+            let mut nodes: std::collections::HashMap<String, NodeInfo> =
+                std::collections::HashMap::new();
+            let mut levels: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+
+            for dir in report.dirs.iter().filter(|dir| dir.size >= floor) {
+                nodes.insert(
+                    dir.path.clone(),
+                    NodeInfo {
+                        size: dir.size,
+                        files: dir.files,
+                        tier: None,
+                    },
+                );
+                if let Some(parent) = parent_of(&dir.path) {
+                    levels.entry(parent).or_default().push(dir.path.clone());
+                }
+            }
+
+            // The root survives the floor on any drive that has data.
+            nodes.entry(report.root.clone()).or_insert(NodeInfo {
+                size: report.total_bytes,
+                files: report.total_files,
+                tier: None,
+            });
+
+            for candidate in &candidates {
+                if let Some(node) = nodes.get_mut(&candidate.path) {
+                    node.tier = Some(candidate.tier);
+                }
+            }
+
+            for list in levels.values_mut() {
+                list.sort_by_key(|path| {
+                    std::cmp::Reverse(nodes.get(path).map(|node| node.size).unwrap_or(0))
+                });
+            }
+
             let _ = sender.send(Message::Done(ScanView {
                 root: report.root,
                 folders: report.dirs.len() as u64,
@@ -200,6 +275,8 @@ impl App {
                 bytes: report.total_bytes,
                 duration: started.elapsed().as_secs_f64(),
                 candidates,
+                nodes,
+                levels,
             }));
             ctx.request_repaint();
         });
@@ -303,6 +380,8 @@ impl App {
                     self.scanning = false;
                     self.picked.clear();
                     self.scan = Some(view);
+                    // A new scan invalidates the previous zoom target.
+                    self.zoom = None;
                 }
                 Message::Staged(items) => self.staged = items,
                 Message::Action(text) => self.toast = Some((text, Instant::now())),
@@ -320,6 +399,44 @@ fn pretty(path: &str) -> String {
         return format!("~{}", &path[home.len()..]);
     }
     path.to_string()
+}
+
+fn file_name(path: &str) -> String {
+    path.rsplit(['\\', '/']).next().unwrap_or(path).to_string()
+}
+
+/// Trim a label to roughly fit a tile, keeping it readable with an ellipsis.
+fn clamp_label(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Choose readable text for an arbitrary fill, by luminance.
+fn on_fill(fill: Color32) -> Color32 {
+    let luma = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
+    if luma > 140.0 {
+        Color32::from_rgb(0x06, 0x0a, 0x10)
+    } else {
+        TEXT
+    }
+}
+
+/// Large areas in the vivid tier colour would be unreadable, so fills are dark
+/// tints and the vivid colour is kept for the tile's top edge.
+fn tile_tint(tier: Tier) -> Color32 {
+    match tier {
+        Tier::SafePurge => Color32::from_rgb(0x11, 0x3d, 0x27),
+        Tier::Review => Color32::from_rgb(0x3d, 0x2c, 0x0c),
+        Tier::Keep => Color32::from_rgb(0x10, 0x24, 0x45),
+        Tier::Locked => Color32::from_rgb(0x3a, 0x14, 0x14),
+    }
 }
 
 fn tier_color(tier: Tier) -> Color32 {
@@ -471,8 +588,13 @@ impl eframe::App for App {
             .frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
             .show(ctx, |ui| {
                 self.summary(ui);
+                ui.add_space(10.0);
+                self.tabs(ui);
                 ui.add_space(6.0);
-                self.review(ui, ctx);
+                match self.pane {
+                    Pane::Map => self.map(ui),
+                    Pane::Review => self.review(ui, ctx),
+                }
                 ui.add_space(14.0);
                 self.quarantine_panel(ui, ctx);
             });
@@ -757,6 +879,277 @@ impl App {
                     });
                 }
             });
+    }
+
+    fn tabs(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            for (pane, label) in [(Pane::Map, "MAP"), (Pane::Review, "REVIEW")] {
+                let active = self.pane == pane;
+                let text = RichText::new(label)
+                    .size(10.5)
+                    .color(if active { TEXT } else { MUTED });
+                if ui.selectable_label(active, text).clicked() {
+                    self.pane = pane;
+                }
+            }
+        });
+    }
+
+    /// The treemap: area is bytes, colour is safety, click zooms.
+    fn map(&mut self, ui: &mut egui::Ui) {
+        let Some(view) = self.scan.as_ref() else {
+            ui.label(RichText::new("Scan the drive to draw the map.").color(MUTED));
+            return;
+        };
+
+        let root = view.root.clone();
+        let current = self.zoom.clone().unwrap_or_else(|| root.clone());
+        let node = view.nodes.get(&current);
+        let current_size = node.map(|n| n.size).unwrap_or(view.bytes);
+        let current_files = node.map(|n| n.files).unwrap_or(view.files);
+
+        let mut zoom_out = false;
+        let mut zoom_to: Option<String> = None;
+
+        ui.horizontal(|ui| {
+            if self.zoom.is_some() && ui.button("‹ up").clicked() {
+                zoom_out = true;
+            }
+            ui.label(
+                RichText::new(pretty(&current))
+                    .monospace()
+                    .size(11.0)
+                    .color(MUTED),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {} files",
+                        bytes(current_size),
+                        thousands(current_files)
+                    ))
+                    .size(10.5)
+                    .color(DIM),
+                );
+            });
+        });
+
+        // Leave room for the quarantine strip below without needing a scroll area.
+        let height = (ui.available_height() - 150.0).max(220.0);
+        let (canvas, response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), height),
+            egui::Sense::click(),
+        );
+
+        let tiles = self.layout_tiles(view, &current, current_size, canvas);
+        let painter = ui.painter_at(canvas);
+        painter.rect_filled(canvas, egui::Rounding::same(6.0), PANEL);
+
+        for tile in &tiles {
+            if tile.rect.width() < 2.0 || tile.rect.height() < 2.0 {
+                continue;
+            }
+
+            let fill = tile
+                .tier
+                .map(tile_tint)
+                .unwrap_or(Color32::from_rgb(0x1c, 0x27, 0x35));
+            let rounding = egui::Rounding::same(3.0);
+            painter.rect_filled(tile.rect, rounding, fill);
+
+            // A vivid top edge carries the tier without making large areas loud.
+            if let Some(tier) = tile.tier {
+                let edge = egui::Rect::from_min_size(
+                    tile.rect.min,
+                    egui::vec2(tile.rect.width(), 3.0),
+                );
+                painter.rect_filled(edge, rounding, tier_color(tier));
+            }
+
+            if tile.rect.width() > 54.0 && tile.rect.height() > 20.0 {
+                let max = (tile.rect.width() / 6.4) as usize;
+                painter.text(
+                    tile.rect.min + egui::vec2(6.0, 5.0),
+                    egui::Align2::LEFT_TOP,
+                    clamp_label(&tile.label, max),
+                    egui::FontId::monospace(10.5),
+                    on_fill(fill),
+                );
+            }
+            if tile.rect.width() > 54.0 && tile.rect.height() > 38.0 {
+                painter.text(
+                    tile.rect.min + egui::vec2(6.0, 21.0),
+                    egui::Align2::LEFT_TOP,
+                    bytes(tile.size),
+                    egui::FontId::monospace(10.0),
+                    on_fill(fill).gamma_multiply(0.72),
+                );
+            }
+        }
+
+        if let Some(pos) = response.hover_pos() {
+            if let Some(tile) = tiles.iter().find(|tile| tile.rect.contains(pos)) {
+                let share = tile.size as f64 / current_size.max(1) as f64 * 100.0;
+                let matched = tile.path.as_ref().and_then(|path| {
+                    view.candidates
+                        .iter()
+                        .find(|candidate| &candidate.path == path)
+                        .map(|candidate| (candidate.tier, candidate.reason.clone()))
+                });
+
+                egui::show_tooltip_at_pointer(
+                    ui.ctx(),
+                    ui.layer_id(),
+                    egui::Id::new("treemap-tip"),
+                    |ui| {
+                        // Without a width floor egui can squeeze this to one
+                        // character per line when the pointer is at the edge.
+                        ui.set_min_width(240.0);
+                        ui.set_max_width(420.0);
+
+                        // Full path here, not `pretty`: "~" alone is correct but
+                        // reads like a rendering failure when the tile _is_ the profile.
+                        let title = tile
+                            .path
+                            .clone()
+                            .unwrap_or_else(|| tile.label.clone());
+                        ui.label(RichText::new(title).monospace().size(11.5));
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {:.1}% of this folder",
+                                bytes(tile.size),
+                                share
+                            ))
+                            .size(10.5)
+                            .color(MUTED),
+                        );
+                        if let Some((tier, reason)) = matched {
+                            ui.label(
+                                RichText::new(tier_label(tier))
+                                    .size(10.5)
+                                    .color(tier_color(tier)),
+                            );
+                            ui.label(RichText::new(reason).size(10.5).color(DIM));
+                        } else if tile.path.is_some() {
+                            ui.label(
+                                RichText::new("no rule matched · not a candidate")
+                                    .size(10.5)
+                                    .color(DIM),
+                            );
+                        }
+                    },
+                );
+            }
+        }
+
+        if response.clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if let Some(tile) = tiles.iter().find(|tile| tile.rect.contains(pos)) {
+                    if let Some(path) = &tile.path {
+                        // Only zoom where there is something below to show.
+                        if view.levels.contains_key(path) {
+                            zoom_to = Some(path.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if zoom_out {
+            self.zoom = match parent_of(&current) {
+                Some(parent) if parent != root => Some(parent),
+                _ => None,
+            };
+        }
+        if let Some(path) = zoom_to {
+            self.zoom = Some(path);
+        }
+    }
+
+    /// One level of the tree, as rectangles.
+    ///
+    /// Children smaller than a sliver of the canvas are folded into a single
+    /// tile rather than drawn as invisible hairlines, and bytes that live
+    /// directly in this folder (not in any child) get their own tile — otherwise
+    /// the level would not add up to the folder's total.
+    fn layout_tiles(
+        &self,
+        view: &ScanView,
+        current: &str,
+        current_size: u64,
+        canvas: egui::Rect,
+    ) -> Vec<Tile> {
+        let floor = (current_size as f64 * 0.0015) as u64;
+        let mut entries: Vec<Tile> = Vec::new();
+        let mut small = 0u64;
+        let mut child_sum = 0u64;
+
+        if let Some(children) = view.levels.get(current) {
+            for path in children {
+                let Some(node) = view.nodes.get(path) else {
+                    continue;
+                };
+                child_sum += node.size;
+                if node.size < floor {
+                    small += node.size;
+                    continue;
+                }
+                entries.push(Tile {
+                    path: Some(path.clone()),
+                    label: file_name(path),
+                    size: node.size,
+                    tier: node.tier,
+                    rect: egui::Rect::NOTHING,
+                });
+            }
+        }
+
+        if small > 0 {
+            entries.push(Tile {
+                path: None,
+                label: "smaller folders".to_string(),
+                size: small,
+                tier: None,
+                rect: egui::Rect::NOTHING,
+            });
+        }
+
+        let direct = current_size.saturating_sub(child_sum);
+        if direct > 0 {
+            entries.push(Tile {
+                path: None,
+                label: "files in this folder".to_string(),
+                size: direct,
+                tier: None,
+                rect: egui::Rect::NOTHING,
+            });
+        }
+
+        let areas: Vec<f64> = entries.iter().map(|tile| tile.size as f64).collect();
+        let boxes = squarify(
+            &areas,
+            Box4::new(
+                canvas.min.x as f64,
+                canvas.min.y as f64,
+                canvas.width() as f64,
+                canvas.height() as f64,
+            ),
+        );
+
+        for (tile, area) in entries.iter_mut().zip(boxes) {
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(area.x as f32, area.y as f32),
+                egui::vec2(area.w as f32, area.h as f32),
+            );
+            // A hairline gutter keeps neighbouring tiles legible.
+            tile.rect = if rect.width() > 4.0 && rect.height() > 4.0 {
+                rect.shrink(1.0)
+            } else {
+                rect
+            };
+        }
+
+        entries
     }
 
     /// The last screen before data stops existing.
