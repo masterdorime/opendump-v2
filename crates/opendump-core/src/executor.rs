@@ -490,6 +490,79 @@ pub fn restore(ids: &[String], journal_path: &Path) -> std::io::Result<BatchResu
     })
 }
 
+/// What is actually inside a staged folder, for the confirmation screen.
+#[derive(Debug, Clone)]
+pub struct StagedDetail {
+    pub id: String,
+    pub src: String,
+    pub file_count: u64,
+    pub top_files: Vec<(String, u64)>,
+    pub truncated: bool,
+}
+
+const MAX_FILES_INSPECTED: u64 = 20_000;
+const TOP_FILES_KEPT: usize = 5;
+
+/// Read the contents of staged folders before offering to destroy them.
+///
+/// "Delete 12.4 GB" is a number; "delete these 10 files, including
+/// UROCHECK VIDEO DEMO.mp4" is a decision. Capped so a 300k-file folder cannot
+/// stall the confirmation.
+pub fn inspect_staged(items: &[QuarantineItem]) -> Vec<StagedDetail> {
+    items
+        .iter()
+        .map(|item| {
+            let mut file_count = 0u64;
+            let mut top_files: Vec<(String, u64)> = Vec::new();
+            let mut truncated = false;
+            let mut stack = vec![PathBuf::from(&item.dst)];
+
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = fs::read_dir(&dir) else {
+                    continue;
+                };
+
+                for entry in entries.flatten() {
+                    if file_count >= MAX_FILES_INSPECTED {
+                        truncated = true;
+                        break;
+                    }
+                    let Ok(file_type) = entry.file_type() else {
+                        continue;
+                    };
+                    if file_type.is_dir() {
+                        stack.push(entry.path());
+                        continue;
+                    }
+                    if !file_type.is_file() {
+                        continue;
+                    }
+                    let Ok(metadata) = entry.metadata() else {
+                        continue;
+                    };
+
+                    file_count += 1;
+                    top_files.push((entry.file_name().to_string_lossy().to_string(), metadata.len()));
+                    top_files.sort_by(|a, b| b.1.cmp(&a.1));
+                    top_files.truncate(TOP_FILES_KEPT);
+                }
+
+                if truncated {
+                    break;
+                }
+            }
+
+            StagedDetail {
+                id: item.id.clone(),
+                src: item.src.clone(),
+                file_count,
+                top_files,
+                truncated,
+            }
+        })
+        .collect()
+}
+
 /// Delete staged copies. This is the step that actually frees space.
 pub fn purge(ids: &[String], journal_path: &Path) -> std::io::Result<BatchResult> {
     let items = list_quarantine(journal_path);

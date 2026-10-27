@@ -20,8 +20,8 @@ pub mod tokens;
 pub mod types;
 
 pub use executor::{
-    list_quarantine, purge, quarantine, restore, staged_path_for, BatchResult, ExecItem,
-    ExecOptions, ExecResult, ExecStatus, QuarantineItem, QuarantineStatus,
+    inspect_staged, list_quarantine, purge, quarantine, restore, staged_path_for, BatchResult,
+    ExecItem, ExecOptions, ExecResult, ExecStatus, QuarantineItem, QuarantineStatus, StagedDetail,
 };
 pub use format::{bytes, thousands};
 pub use rules::{compile, find_candidates, match_rule, Candidate, CompiledRule};

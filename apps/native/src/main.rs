@@ -15,9 +15,9 @@ use eframe::egui::{self, Color32, RichText};
 use serde::Deserialize;
 
 use opendump_core::{
-    bytes, compile, default_tokens, find_candidates, list_quarantine, match_rule, purge,
-    quarantine, restore, scan, thousands, Candidate, CompiledRule, ExecItem, ExecOptions, Rule,
-    Tier,
+    bytes, compile, default_tokens, find_candidates, inspect_staged, list_quarantine, match_rule,
+    purge, quarantine, restore, scan, thousands, Candidate, CompiledRule, ExecItem, ExecOptions,
+    Rule, StagedDetail, Tier,
 };
 
 const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/rules.json"));
@@ -142,6 +142,14 @@ fn classify(path: &str, compiled: &[CompiledRule]) -> Result<(ExecItem, String),
 
 // ----------------------------------------------------------------------- app
 
+struct ConfirmState {
+    ids: Vec<String>,
+    details: Vec<StagedDetail>,
+    bytes: u64,
+    files: u64,
+    acknowledged: bool,
+}
+
 struct App {
     sender: Sender<Message>,
     receiver: Receiver<Message>,
@@ -150,7 +158,7 @@ struct App {
     scan: Option<ScanView>,
     picked: std::collections::HashSet<String>,
     staged: Vec<StagedView>,
-    confirm_purge: bool,
+    confirm: Option<ConfirmState>,
     toast: Option<(String, Instant)>,
 }
 
@@ -164,7 +172,7 @@ impl App {
             scan: None,
             picked: Default::default(),
             staged: staged_snapshot(),
-            confirm_purge: false,
+            confirm: None,
             toast: None,
         }
     }
@@ -269,13 +277,7 @@ impl App {
         });
     }
 
-    fn purge_all(&mut self, ctx: &egui::Context) {
-        let ids: Vec<String> = self
-            .staged
-            .iter()
-            .filter(|item| item.status == "quarantined")
-            .map(|item| item.id.clone())
-            .collect();
+    fn purge_ids(&mut self, ids: Vec<String>, ctx: &egui::Context) {
         if ids.is_empty() {
             return;
         }
@@ -302,10 +304,7 @@ impl App {
                     self.picked.clear();
                     self.scan = Some(view);
                 }
-                Message::Staged(items) => {
-                    self.staged = items;
-                    self.confirm_purge = false;
-                }
+                Message::Staged(items) => self.staged = items,
                 Message::Action(text) => self.toast = Some((text, Instant::now())),
             }
         }
@@ -477,6 +476,8 @@ impl eframe::App for App {
                 ui.add_space(14.0);
                 self.quarantine_panel(ui, ctx);
             });
+
+        self.confirm_modal(ctx);
 
         if let Some((text, at)) = self.toast.clone() {
             if at.elapsed().as_secs() < 6 {
@@ -683,27 +684,31 @@ impl App {
             ui.label(RichText::new("QUARANTINE").size(10.5).color(MUTED));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enabled = active_count > 0;
-                let label = if self.confirm_purge {
-                    format!("Confirm: delete {}?", bytes(total))
-                } else {
-                    "Purge all".to_string()
-                };
-                let fill = if self.confirm_purge {
-                    Color32::from_rgb(0x7f, 0x1d, 0x1d)
-                } else {
-                    Color32::from_rgb(0x3a, 0x14, 0x14)
-                };
                 if ui
-                    .add_enabled(enabled, egui::Button::new(RichText::new(label).color(Color32::from_rgb(0xfc, 0xa5, 0xa5))).fill(fill))
+                    .add_enabled(
+                        enabled,
+                        egui::Button::new(
+                            RichText::new("Purge all").color(Color32::from_rgb(0xfc, 0xa5, 0xa5)),
+                        )
+                        .fill(Color32::from_rgb(0x3a, 0x14, 0x14)),
+                    )
                     .clicked()
                 {
-                    if self.confirm_purge {
-                        self.confirm_purge = false;
-                        self.purge_all(ctx);
-                    } else {
-                        // Deleting staged data is irreversible; a single click is
-                        // not enough, so the button arms first.
-                        self.confirm_purge = true;
+                    // Never delete without showing what is inside.
+                    let staged = list_quarantine(&base_dir().join("journal.jsonl"));
+                    let active: Vec<_> = staged
+                        .into_iter()
+                        .filter(|item| item.status.as_str() == "quarantined")
+                        .collect();
+                    if !active.is_empty() {
+                        let details = inspect_staged(&active);
+                        self.confirm = Some(ConfirmState {
+                            ids: active.iter().map(|item| item.id.clone()).collect(),
+                            files: details.iter().map(|detail| detail.file_count).sum(),
+                            bytes: active.iter().map(|item| item.bytes).sum(),
+                            details,
+                            acknowledged: false,
+                        });
                     }
                 }
                 if ui.add_enabled(enabled, egui::Button::new("Restore all")).clicked() {
@@ -752,6 +757,133 @@ impl App {
                     });
                 }
             });
+    }
+
+    /// The last screen before data stops existing.
+    ///
+    /// It answers "what am I destroying?" rather than "how much?" — folder
+    /// paths, real filenames, a file count, and a tick you must make before the
+    /// confirm button enables.
+    fn confirm_modal(&mut self, ctx: &egui::Context) {
+        let Some(mut state) = self.confirm.take() else {
+            return;
+        };
+
+        let mut cancel = false;
+        let mut confirmed = false;
+
+        let screen = ctx.screen_rect();
+        ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::new("purge-dim"),
+        ))
+        .rect_filled(screen, 0.0, Color32::from_black_alpha(190));
+
+        // Swallow clicks so the panels behind the dialog cannot be operated.
+        egui::Area::new(egui::Id::new("purge-block"))
+            .fixed_pos(egui::pos2(0.0, 0.0))
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                ui.set_min_size(screen.size());
+                ui.allocate_response(screen.size(), egui::Sense::click());
+            });
+
+        egui::Window::new("Permanently delete")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .order(egui::Order::Foreground)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(PANEL)
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        Color32::from_rgb(0x5a, 0x24, 0x24),
+                    )),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(560.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Delete {} folder{} · {} permanently",
+                        state.ids.len(),
+                        if state.ids.len() == 1 { "" } else { "s" },
+                        bytes(state.bytes)
+                    ))
+                    .strong()
+                    .size(14.0),
+                );
+                ui.label(
+                    RichText::new(
+                        "There is no undo after this. Quarantine could be restored; this cannot.",
+                    )
+                    .size(11.0)
+                    .color(Color32::from_rgb(0xfc, 0xca, 0xca)),
+                );
+                ui.add_space(8.0);
+
+                egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                    for detail in &state.details {
+                        ui.label(RichText::new(pretty(&detail.src)).monospace().size(11.0));
+                        ui.label(
+                            RichText::new(if detail.truncated {
+                                format!("{}+ files", thousands(detail.file_count))
+                            } else {
+                                format!("{} files", thousands(detail.file_count))
+                            })
+                            .size(10.0)
+                            .color(DIM),
+                        );
+                        for (name, size) in &detail.top_files {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(name).monospace().size(10.5).color(MUTED));
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            RichText::new(bytes(*size))
+                                                .monospace()
+                                                .size(10.5)
+                                                .color(DIM),
+                                        );
+                                    },
+                                );
+                            });
+                        }
+                        ui.add_space(8.0);
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.checkbox(
+                    &mut state.acknowledged,
+                    format!(
+                        "I understand these {} files will be destroyed",
+                        thousands(state.files)
+                    ),
+                );
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    let button = egui::Button::new(
+                        RichText::new(format!("Permanently delete {}", bytes(state.bytes)))
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(0x7f, 0x1d, 0x1d));
+                    if ui.add_enabled(state.acknowledged, button).clicked() {
+                        confirmed = true;
+                    }
+                });
+            });
+
+        if confirmed {
+            self.purge_ids(state.ids.clone(), ctx);
+        } else if !cancel {
+            self.confirm = Some(state);
+        }
     }
 }
 

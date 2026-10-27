@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use opendump_core::{
-    list_quarantine, purge, quarantine, restore, ExecItem, ExecOptions, ExecStatus,
-    QuarantineStatus, Tier,
+    inspect_staged, list_quarantine, purge, quarantine, restore, ExecItem, ExecOptions,
+    ExecStatus, QuarantineStatus, Tier,
 };
 
 fn workspace(tag: &str) -> PathBuf {
@@ -227,6 +227,43 @@ fn a_staged_copy_removed_by_hand_reports_missing() {
 
     let result = purge(&[after[0].id.clone()], &opts.journal_path).expect("purge");
     assert_eq!(result.items[0].status, ExecStatus::Skipped);
+
+    fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn inspecting_a_staged_folder_reports_its_files_biggest_first() {
+    let root = workspace("inspect");
+    let target = make_folder(&root, "data/cache", "small.bin", "x");
+    fs::write(Path::new(&target).join("big.bin"), vec![b'x'; 4096]).expect("write big");
+
+    let opts = options(&root);
+    quarantine(&[item(&target, Tier::SafePurge)], &opts).expect("quarantine");
+
+    let staged = list_quarantine(&opts.journal_path);
+    let details = inspect_staged(&staged);
+
+    assert_eq!(details.len(), 1);
+    assert_eq!(details[0].file_count, 2);
+    assert_eq!(details[0].top_files[0].0, "big.bin");
+    assert_eq!(details[0].top_files[0].1, 4096);
+    assert!(!details[0].truncated);
+
+    fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn inspecting_a_missing_staged_folder_reports_zero_files() {
+    let root = workspace("inspect-missing");
+    let target = make_folder(&root, "data/cache", "a.bin", "x");
+    let opts = options(&root);
+
+    quarantine(&[item(&target, Tier::SafePurge)], &opts).expect("quarantine");
+    let staged = list_quarantine(&opts.journal_path);
+    fs::remove_dir_all(&staged[0].dst).expect("remove by hand");
+
+    let details = inspect_staged(&staged);
+    assert_eq!(details[0].file_count, 0);
 
     fs::remove_dir_all(&root).expect("cleanup");
 }
