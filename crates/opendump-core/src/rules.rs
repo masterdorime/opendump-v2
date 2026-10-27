@@ -20,7 +20,7 @@ pub struct CompiledRule {
     regex: Option<Regex>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub path: String,
     /// Bytes attributable to this folder excluding nested candidates.

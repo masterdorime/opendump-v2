@@ -12,6 +12,7 @@
 //!    than removable.
 //! 4. `display` rules colour a map, protect nothing, and are never candidates.
 
+pub mod cache;
 pub mod executor;
 pub mod format;
 pub mod hardware;
@@ -25,6 +26,7 @@ pub use executor::{
     inspect_staged, list_quarantine, purge, quarantine, restore, staged_path_for, BatchResult,
     ExecItem, ExecOptions, ExecResult, ExecStatus, QuarantineItem, QuarantineStatus, StagedDetail,
 };
+pub use cache::{CachedNode, CachedScan};
 pub use format::{bytes, thousands};
 pub use hardware::{Gpu, Memory};
 pub use layout::{squarify, Box4};

@@ -15,10 +15,10 @@ use eframe::egui::{self, Color32, RichText};
 use serde::Deserialize;
 
 use opendump_core::{
-    bytes, compile, default_tokens, find_candidates, hardware, inspect_staged, list_quarantine,
+    bytes, cache, compile, default_tokens, find_candidates, hardware, inspect_staged, list_quarantine,
     match_rule, parent_of, purge, quarantine, restore, scan, scan_with_progress, squarify,
-    thousands, Box4, Candidate, CompiledRule, ExecItem, ExecOptions, Memory, Rule, ScanProgress,
-    StagedDetail, Tier,
+    thousands, Box4, CachedNode, CachedScan, Candidate, CompiledRule, ExecItem, ExecOptions, Memory,
+    Rule, ScanProgress, StagedDetail, Tier,
 };
 
 const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/rules.json"));
@@ -93,6 +93,8 @@ struct ScanView {
     nodes: std::collections::HashMap<String, NodeInfo>,
     /// parent path -> child paths, largest first.
     levels: std::collections::HashMap<String, Vec<String>>,
+    /// Unix seconds when the walk finished.
+    scanned_at: u64,
 }
 
 struct StagedView {
@@ -115,6 +117,53 @@ fn base_dir() -> PathBuf {
     std::env::var("APPDATA")
         .map(|appdata| PathBuf::from(appdata).join("opendump-native"))
         .unwrap_or_else(|_| PathBuf::from(".opendump-native"))
+}
+
+fn cache_path() -> PathBuf {
+    base_dir().join("scan-cache.bin")
+}
+
+/// Invalidate the cache whenever the rules that produced it change.
+fn rules_fingerprint() -> u64 {
+    cache::rules_hash(RULES_JSON)
+}
+
+/// Rebuild the view the window expects from a cache written by another run.
+fn view_from_cache(cached: CachedScan) -> ScanView {
+    let mut nodes = std::collections::HashMap::new();
+    let mut levels: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+    for node in cached.nodes {
+        if let Some(parent) = parent_of(&node.path) {
+            levels.entry(parent).or_default().push(node.path.clone());
+        }
+        nodes.insert(
+            node.path,
+            NodeInfo {
+                size: node.size,
+                files: node.files,
+                tier: node.tier,
+            },
+        );
+    }
+
+    for list in levels.values_mut() {
+        list.sort_by_key(|path| {
+            std::cmp::Reverse(nodes.get(path).map(|node| node.size).unwrap_or(0))
+        });
+    }
+
+    ScanView {
+        root: cached.root,
+        folders: cached.folders,
+        files: cached.total_files,
+        bytes: cached.total_bytes,
+        duration: cached.duration_ms as f64 / 1000.0,
+        candidates: cached.candidates,
+        nodes,
+        levels,
+        scanned_at: cached.scanned_at,
+    }
 }
 
 fn exec_options() -> ExecOptions {
@@ -221,7 +270,7 @@ struct App {
 
 impl App {
     fn new(sender: Sender<Message>, receiver: Receiver<Message>) -> Self {
-        Self {
+        let mut app = Self {
             sender,
             receiver,
             scanning: false,
@@ -240,7 +289,15 @@ impl App {
             filter: None,
             progress: None,
             scan_started: None,
+        };
+
+        // Open to the last map when the cache was written by these rules.
+        if let Some(cached) = cache::load(&cache_path(), rules_fingerprint()) {
+            app.space = hardware::disk_space(&app.scan_root);
+            app.scan = Some(view_from_cache(cached));
         }
+
+        app
     }
 
     fn start_scan(&mut self, ctx: &egui::Context) {
@@ -307,15 +364,42 @@ impl App {
                 });
             }
 
+            let scanned_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs())
+                .unwrap_or(0);
+            let duration_ms = started.elapsed().as_millis() as u64;
+
+            let cached = CachedScan {
+                root: report.root.clone(),
+                scanned_at,
+                duration_ms,
+                total_bytes: report.total_bytes,
+                total_files: report.total_files,
+                folders: report.dirs.len() as u64,
+                nodes: nodes
+                    .iter()
+                    .map(|(path, node)| CachedNode {
+                        path: path.clone(),
+                        size: node.size,
+                        files: node.files,
+                        tier: node.tier,
+                    })
+                    .collect(),
+                candidates: candidates.clone(),
+            };
+            let _ = cache::save(&cache_path(), &cached, rules_fingerprint());
+
             let _ = sender.send(Message::Done(ScanView {
                 root: report.root,
                 folders: report.dirs.len() as u64,
                 files: report.total_files,
                 bytes: report.total_bytes,
-                duration: started.elapsed().as_secs_f64(),
+                duration: duration_ms as f64 / 1000.0,
                 candidates,
                 nodes,
                 levels,
+                scanned_at,
             }));
             ctx.request_repaint();
         });
@@ -402,7 +486,11 @@ impl App {
 
         std::thread::spawn(move || {
             let message = match purge(&ids, &base_dir().join("journal.jsonl")) {
-                Ok(batch) => format!("{} reclaimed", bytes(batch.bytes)),
+                Ok(batch) => {
+                    // The sizes on disk just changed; a cached map would be lying.
+                    let _ = std::fs::remove_file(cache_path());
+                    format!("{} reclaimed", bytes(batch.bytes))
+                }
                 Err(error) => format!("purge failed: {error}"),
             };
             let _ = sender.send(Message::Action(message));
@@ -616,6 +704,26 @@ fn legend_item(ui: &mut egui::Ui, colour: Color32, text: &str) {
     ui.painter().rect_filled(rect, 2.0, colour);
     ui.label(RichText::new(text).size(9.5).color(MUTED));
     ui.add_space(10.0);
+}
+
+/// "scanned 3 min ago" — the phrase v1 had in its header.
+fn relative_time(seconds: u64) -> String {
+    if seconds == 0 {
+        return "never".to_string();
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(seconds);
+    let age = now.saturating_sub(seconds);
+
+    match age {
+        0..=59 => "just now".to_string(),
+        60..=3599 => format!("{} min ago", age / 60),
+        3600..=86_399 => format!("{} h ago", age / 3600),
+        _ => format!("{} d ago", age / 86_400),
+    }
 }
 
 fn last_component(path: &str) -> &str {
@@ -948,10 +1056,11 @@ impl eframe::App for App {
                         ui.label(RichText::new("opendump").strong().size(13.5));
                         let subtitle = match &self.scan {
                             Some(view) => format!(
-                                "{} · {} folders · {} · {:.1}s",
+                                "{} · {} folders · {} · scanned {} ({:.0}s)",
                                 view.root,
                                 thousands(view.folders),
                                 bytes(view.bytes),
+                                relative_time(view.scanned_at),
                                 view.duration
                             ),
                             None => "native core · nothing scanned yet".to_string(),
@@ -960,7 +1069,13 @@ impl eframe::App for App {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let label = if self.scanning { "Scanning…" } else { "Scan C:\\" };
+                        let label = if self.scanning {
+                            "Scanning…"
+                        } else if self.scan.is_some() {
+                            "Rescan"
+                        } else {
+                            "Scan C:\\"
+                        };
                         let button = egui::Button::new(
                             RichText::new(label).color(ON_ACCENT).strong(),
                         )
