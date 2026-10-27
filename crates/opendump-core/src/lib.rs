@@ -29,6 +29,6 @@ pub use format::{bytes, thousands};
 pub use hardware::{Gpu, Memory};
 pub use layout::{squarify, Box4};
 pub use rules::{compile, depth_of, find_candidates, match_rule, parent_of, Candidate, CompiledRule};
-pub use scan::{scan, ScanReport};
+pub use scan::{scan, scan_with_progress, ScanProgress, ScanReport};
 pub use tokens::{default_tokens, expand, TokenMap};
 pub use types::{DirEntry, Rule, RuleMatch, Tier};

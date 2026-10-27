@@ -16,8 +16,9 @@ use serde::Deserialize;
 
 use opendump_core::{
     bytes, compile, default_tokens, find_candidates, hardware, inspect_staged, list_quarantine,
-    match_rule, parent_of, purge, quarantine, restore, scan, squarify, thousands, Box4, Candidate,
-    CompiledRule, ExecItem, ExecOptions, Memory, Rule, StagedDetail, Tier,
+    match_rule, parent_of, purge, quarantine, restore, scan, scan_with_progress, squarify,
+    thousands, Box4, Candidate, CompiledRule, ExecItem, ExecOptions, Memory, Rule, ScanProgress,
+    StagedDetail, Tier,
 };
 
 const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/rules.json"));
@@ -107,6 +108,7 @@ enum Message {
     Staged(Vec<StagedView>),
     Action(String),
     Memory(Memory),
+    Progress(ScanProgress),
 }
 
 fn base_dir() -> PathBuf {
@@ -211,6 +213,10 @@ struct App {
     /// Total and free bytes on the scanned volume.
     space: Option<(u64, u64)>,
     map_cache: Option<MapCache>,
+    /// Review filter; `None` means every tier.
+    filter: Option<Tier>,
+    progress: Option<ScanProgress>,
+    scan_started: Option<Instant>,
 }
 
 impl App {
@@ -231,6 +237,9 @@ impl App {
             probe_started: false,
             space: None,
             map_cache: None,
+            filter: None,
+            progress: None,
+            scan_started: None,
         }
     }
 
@@ -239,6 +248,8 @@ impl App {
             return;
         }
         self.scanning = true;
+        self.progress = None;
+        self.scan_started = Some(Instant::now());
         let sender = self.sender.clone();
         let root = self.scan_root.clone();
         let ctx = ctx.clone();
@@ -246,7 +257,10 @@ impl App {
         std::thread::spawn(move || {
             let _ = sender.send(Message::Started);
             let started = Instant::now();
-            let report = scan(Path::new(&root));
+            let report = scan_with_progress(Path::new(&root), |progress| {
+                let _ = sender.send(Message::Progress(progress));
+                ctx.request_repaint();
+            });
             let compiled = rules();
             let candidates = find_candidates(&report.dirs, &compiled, 1024 * 1024);
 
@@ -408,6 +422,8 @@ impl App {
                     // A new scan invalidates the previous zoom target and layout.
                     self.zoom = None;
                     self.map_cache = None;
+                    self.progress = None;
+                    self.scan_started = None;
                 }
                 Message::Staged(items) => self.staged = items,
                 Message::Action(text) => self.toast = Some((text, Instant::now())),
@@ -416,6 +432,7 @@ impl App {
                     // Cheap syscall, and it has to move when a purge reclaims space.
                     self.space = hardware::disk_space(&self.scan_root);
                 }
+                Message::Progress(progress) => self.progress = Some(progress),
             }
         }
     }
@@ -509,35 +526,88 @@ fn clamp_label(text: &str, max_chars: usize) -> String {
 /// Choose readable text for an arbitrary fill, by luminance.
 fn on_fill(fill: Color32) -> Color32 {
     let luma = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
-    if luma > 140.0 {
-        Color32::from_rgb(0x06, 0x0a, 0x10)
+    if luma > 100.0 {
+        Color32::from_rgb(0x12, 0x08, 0x0a)
     } else {
         TEXT
     }
 }
 
-/// Fill for one rectangle. Depth lifts the colour, the way v1 raised its alpha
-/// with depth, so nesting reads without drawing a border at every level.
-///
-/// The lift interpolates between two tints rather than toward white: adding
-/// equal amounts to every channel washes the hue out and the map reads grey.
+/// Fill for one rectangle: the tier's own colour over the page, getting deeper
+/// as you drill. Category is the primary signal — the map is read by verdict —
+/// so the hue never shifts away from the tier, only its weight.
 fn tile_fill(tier: Option<Tier>, depth: usize) -> Color32 {
-    let t = (depth.min(7) as f32) / 7.0;
+    let alpha = 0.34 + (depth.min(6) as f32) * 0.075;
 
-    let (near, far) = match tier {
-        Some(Tier::SafePurge) => ((0x18, 0x2c, 0x21), (0x2f, 0x6b, 0x47)),
-        Some(Tier::Review) => ((0x33, 0x24, 0x11), (0x76, 0x55, 0x1b)),
-        Some(Tier::Keep) => ((0x14, 0x20, 0x33), (0x2b, 0x49, 0x74)),
-        Some(Tier::Locked) => ((0x33, 0x11, 0x16), (0x7d, 0x22, 0x2d)),
-        None => ((0x24, 0x14, 0x16), (0x60, 0x34, 0x38)),
+    let (r, g, b) = match tier {
+        Some(Tier::SafePurge) => (0x22, 0xc5, 0x5e),
+        Some(Tier::Review) => (0xf5, 0x9e, 0x0b),
+        Some(Tier::Keep) => (0x3b, 0x82, 0xf6),
+        Some(Tier::Locked) => (0xef, 0x44, 0x44),
+        None => (0x4e, 0x3f, 0x43),
     };
 
-    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+    let mix = |base: u8, over: u8| (base as f32 * (1.0 - alpha) + over as f32 * alpha) as u8;
     Color32::from_rgb(
-        mix(near.0, far.0),
-        mix(near.1, far.1),
-        mix(near.2, far.2),
+        mix(BG.r(), r),
+        mix(BG.g(), g),
+        mix(BG.b(), b),
     )
+}
+
+fn tier_index(tier: Tier) -> usize {
+    match tier {
+        Tier::SafePurge => 0,
+        Tier::Review => 1,
+        Tier::Keep => 2,
+        Tier::Locked => 3,
+    }
+}
+
+/// A filter chip: what it selects, how many, and how much.
+fn chip(
+    ui: &mut egui::Ui,
+    label: &str,
+    count: usize,
+    size: u64,
+    active: bool,
+    colour: Color32,
+) -> bool {
+    let text = if size > 0 {
+        format!("{label}  {count} · {}", bytes(size))
+    } else {
+        format!("{label}  {count}")
+    };
+
+    let rich = if active {
+        RichText::new(text)
+            .size(10.0)
+            .color(Color32::from_rgb(0x16, 0x0b, 0x0d))
+    } else {
+        RichText::new(text).size(10.0).color(MUTED)
+    };
+
+    let button = egui::Button::new(rich)
+        .fill(if active { colour } else { PANEL })
+        .rounding(egui::Rounding::same(11.0))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            if active { colour } else { LINE },
+        ));
+
+    ui.add(button).clicked()
+}
+
+/// The small verdict badge beside a row's path.
+fn tier_pill(ui: &mut egui::Ui, tier: Tier) {
+    let colour = tier_color(tier);
+    egui::Frame::none()
+        .fill(colour.gamma_multiply(0.22))
+        .rounding(egui::Rounding::same(5.0))
+        .inner_margin(egui::Margin::symmetric(5.0, 1.0))
+        .show(ui, |ui| {
+            ui.label(RichText::new(tier_label(tier)).size(9.0).color(colour));
+        });
 }
 
 /// One legend swatch with its label.
@@ -569,6 +639,7 @@ fn build_visuals(
     size: u64,
     rect: egui::Rect,
     depth: usize,
+    inherited: Option<Tier>,
     out: &mut Vec<Visual>,
 ) -> bool {
     const MAX_DEPTH: usize = 9;
@@ -668,12 +739,17 @@ fn build_visuals(
         }
 
         let child_path = item.path;
+        // A folder inherits the nearest classified verdict above it, so a
+        // scratch folder inside a REVIEW tree reads as review rather than as
+        // another grey box. Its own tier always wins.
+        let tier = item.tier.or(inherited);
+
         out.push(Visual {
             rect: tile,
             path: child_path.map(str::to_string),
             label: item.label.to_string(),
             size: item.size,
-            tier: item.tier,
+            tier,
             depth,
             leaf: true,
         });
@@ -690,7 +766,7 @@ fn build_visuals(
             } else {
                 tile.shrink(1.5)
             };
-            if build_visuals(view, child_path, item.size, inner, depth + 1, out) {
+            if build_visuals(view, child_path, item.size, inner, depth + 1, tier, out) {
                 out[index].leaf = false;
             }
         }
@@ -909,6 +985,10 @@ impl eframe::App for App {
                         space_meter(ui, self.space);
                     });
                 });
+
+                if self.scanning {
+                    self.scan_progress_bar(ui);
+                }
             });
 
         if self.pane == Pane::Map && self.scan.is_some() {
@@ -1000,46 +1080,79 @@ impl App {
     }
 
     fn review(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("REVIEW").size(10.5).color(MUTED));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let picked_bytes: u64 = self
-                    .scan
-                    .as_ref()
-                    .map(|view| {
-                        view.candidates
-                            .iter()
-                            .filter(|c| self.picked.contains(&c.path))
-                            .map(|c| c.size)
-                            .sum()
-                    })
-                    .unwrap_or(0);
+        let Some(view) = &self.scan else {
+            ui.label(RichText::new("Scan the drive to see what can be removed.").color(MUTED));
+            return;
+        };
 
-                let enabled = !self.picked.is_empty();
-                if ui.add_enabled(enabled, egui::Button::new("Quarantine")).clicked() {
-                    self.quarantine_picked(ctx);
+        // Counts and bytes per tier, for the filter chips.
+        let mut counts = [(0usize, 0u64); 4];
+        for candidate in &view.candidates {
+            let slot = &mut counts[tier_index(candidate.tier)];
+            slot.0 += 1;
+            slot.1 += candidate.size;
+        }
+        let total_count: usize = counts.iter().map(|slot| slot.0).sum();
+        let total_bytes: u64 = counts.iter().map(|slot| slot.1).sum();
+
+        let mut pick: Option<Option<Tier>> = None;
+
+        ui.scope(|ui| {
+            ui.spacing_mut().button_padding = egui::vec2(9.0, 4.0);
+            ui.horizontal_wrapped(|ui| {
+                if chip(ui, "All", total_count, total_bytes, self.filter.is_none(), ACCENT) {
+                    pick = Some(None);
                 }
-                ui.label(
-                    RichText::new(format!(
-                        "{} selected · {}",
-                        self.picked.len(),
-                        bytes(picked_bytes)
-                    ))
-                    .size(11.0)
-                    .color(MUTED),
-                );
+                for tier in [Tier::SafePurge, Tier::Review, Tier::Keep, Tier::Locked] {
+                    let (count, size) = counts[tier_index(tier)];
+                    if chip(
+                        ui,
+                        tier_label(tier),
+                        count,
+                        size,
+                        self.filter == Some(tier),
+                        tier_color(tier),
+                    ) {
+                        pick = Some(Some(tier));
+                    }
+                }
+            });
+        });
+
+        if let Some(choice) = pick {
+            self.filter = choice;
+        }
+
+        ui.add_space(8.0);
+
+        let mut visible: Vec<&Candidate> = view
+            .candidates
+            .iter()
+            .filter(|candidate| self.filter.map_or(true, |tier| candidate.tier == tier))
+            .collect();
+
+        // Actionable tiers first: a review list that opens on fifty protected
+        // folders is a list of things you cannot do anything about.
+        visible.sort_by(|left, right| {
+            tier_index(left.tier)
+                .cmp(&tier_index(right.tier))
+                .then(right.size.cmp(&left.size))
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("{} rows", visible.len()))
+                    .size(10.0)
+                    .color(DIM),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Select all safe").clicked() {
-                    let safe: Vec<String> = self
-                        .scan
-                        .as_ref()
-                        .map(|view| {
-                            view.candidates
-                                .iter()
-                                .filter(|c| c.tier == Tier::SafePurge)
-                                .map(|c| c.path.clone())
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                    let safe: Vec<String> = view
+                        .candidates
+                        .iter()
+                        .filter(|candidate| candidate.tier == Tier::SafePurge)
+                        .map(|candidate| candidate.path.clone())
+                        .collect();
                     self.picked = safe.into_iter().collect();
                 }
             });
@@ -1047,21 +1160,19 @@ impl App {
 
         ui.add_space(4.0);
 
-        let Some(view) = &self.scan else {
-            return;
-        };
+        let list_height = (ui.available_height() - 92.0).max(200.0);
 
         egui::ScrollArea::vertical()
-            .max_height(360.0)
+            .max_height(list_height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for candidate in &view.candidates {
+                for candidate in &visible {
                     let selectable =
                         candidate.tier == Tier::SafePurge || candidate.tier == Tier::Review;
 
                     egui::Frame::none()
                         .fill(if self.picked.contains(&candidate.path) {
-                            Color32::from_rgb(0x0d, 0x18, 0x14)
+                            Color32::from_rgb(0x22, 0x12, 0x15)
                         } else {
                             BG
                         })
@@ -1089,14 +1200,20 @@ impl App {
                                     .rect_filled(rect, 2.0, tier_color(candidate.tier));
 
                                 ui.vertical(|ui| {
-                                    let mut title =
-                                        RichText::new(pretty(&candidate.path)).monospace().size(11.5);
-                                    if candidate.blocked {
-                                        title = title.color(MUTED);
-                                    }
-                                    ui.label(title);
+                                    ui.horizontal(|ui| {
+                                        let mut title = RichText::new(pretty(&candidate.path))
+                                            .monospace()
+                                            .size(11.5);
+                                        if candidate.blocked {
+                                            title = title.color(MUTED);
+                                        }
+                                        ui.label(title);
+                                        tier_pill(ui, candidate.tier);
+                                    });
                                     ui.label(
-                                        RichText::new(&candidate.reason).size(10.5).color(DIM),
+                                        RichText::new(&candidate.reason)
+                                            .size(10.5)
+                                            .color(DIM),
                                     );
                                 });
 
@@ -1125,6 +1242,45 @@ impl App {
                         });
                 }
             });
+
+        ui.add_space(8.0);
+
+        let picked_bytes: u64 = view
+            .candidates
+            .iter()
+            .filter(|candidate| self.picked.contains(&candidate.path))
+            .map(|candidate| candidate.size)
+            .sum();
+
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!(
+                    "{} selected · {} reclaimable",
+                    self.picked.len(),
+                    bytes(picked_bytes)
+                ))
+                .size(10.5)
+                .color(MUTED),
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let enabled = !self.picked.is_empty();
+                let button = egui::Button::new(
+                    RichText::new("Quarantine selected").color(ON_ACCENT),
+                )
+                .fill(if enabled {
+                    ACCENT
+                } else {
+                    Color32::from_rgb(0x3a, 0x1a, 0x1e)
+                });
+                if ui.add_enabled(enabled, button).clicked() {
+                    self.quarantine_picked(ctx);
+                }
+                if ui.button("Clear").clicked() {
+                    self.picked.clear();
+                }
+            });
+        });
     }
 
     fn quarantine_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1219,16 +1375,91 @@ impl App {
             });
     }
 
+    /// Live progress while the walk runs.
+    ///
+    /// The denominator is the volume's used bytes, so the percentage is work
+    /// actually completed rather than an animated lie. It stalls while a huge
+    /// folder is read and jumps at the end, which is the truth of the walk.
+    fn scan_progress_bar(&self, ui: &mut egui::Ui) {
+        let used = self
+            .space
+            .map(|(total, free)| total.saturating_sub(free))
+            .unwrap_or(0);
+
+        let seen = self.progress.as_ref().map(|p| p.bytes).unwrap_or(0);
+        let ratio = if used > 0 {
+            (seen as f32 / used as f32).clamp(0.0, 0.99)
+        } else {
+            0.0
+        };
+
+        let elapsed = self
+            .scan_started
+            .map(|started| started.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+        let eta = if ratio > 0.03 {
+            elapsed / ratio as f64 * (1.0 - ratio as f64)
+        } else {
+            0.0
+        };
+
+        ui.add_space(10.0);
+
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("{:.0}%", ratio * 100.0))
+                    .size(10.5)
+                    .color(TEXT)
+                    .monospace(),
+            );
+            if let Some(progress) = &self.progress {
+                ui.label(
+                    RichText::new(format!(
+                        "{} folders · {} files · {}",
+                        thousands(progress.folders),
+                        thousands(progress.files),
+                        bytes(progress.bytes)
+                    ))
+                    .size(10.0)
+                    .color(MUTED)
+                    .monospace(),
+                );
+            }
+            if eta > 1.0 {
+                ui.label(
+                    RichText::new(format!("~{eta:.0}s left"))
+                        .size(10.0)
+                        .color(DIM)
+                        .monospace(),
+                );
+            }
+        });
+
+        let (track, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 6.0),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter();
+        painter.rect_filled(track, 3.0, Color32::from_rgb(0x2c, 0x18, 0x1c));
+        let mut filled = track;
+        filled.set_width(track.width() * ratio);
+        painter.rect_filled(filled, 3.0, ACCENT);
+
+        if let Some(progress) = &self.progress {
+            ui.label(
+                RichText::new(clamp_label(&progress.current, 110))
+                    .size(9.0)
+                    .color(DIM)
+                    .monospace(),
+            );
+        }
+    }
+
     fn tabs(&mut self, ui: &mut egui::Ui) {
         let actionable = self
             .scan
             .as_ref()
-            .map(|view| {
-                view.candidates
-                    .iter()
-                    .filter(|c| c.tier == Tier::SafePurge || c.tier == Tier::Review)
-                    .count()
-            })
+            .map(|view| view.candidates.len())
             .unwrap_or(0);
         let held = self
             .staged
@@ -1472,7 +1703,7 @@ impl App {
             .unwrap_or(view.bytes);
 
         let mut visuals = Vec::new();
-        build_visuals(view, current, size, canvas, 0, &mut visuals);
+        build_visuals(view, current, size, canvas, 0, None, &mut visuals);
 
         self.map_cache = Some(MapCache {
             root: current.to_string(),

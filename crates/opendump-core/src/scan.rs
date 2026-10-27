@@ -46,6 +46,16 @@ pub struct ScanReport {
     pub duration_ms: u128,
 }
 
+/// What the walk knows part-way through. `bytes` is the sum of file sizes seen
+/// so far, which is a real measure of work done — not an estimate.
+#[derive(Debug, Clone, Default)]
+pub struct ScanProgress {
+    pub folders: u64,
+    pub files: u64,
+    pub bytes: u64,
+    pub current: String,
+}
+
 struct Record {
     path: String,
     bytes: u64,
@@ -55,6 +65,17 @@ struct Record {
 
 /// Walk `root` and return every directory with its recursive size.
 pub fn scan(root: &Path) -> ScanReport {
+    scan_with_progress(root, |_| {})
+}
+
+/// Same walk, reporting progress as it goes.
+///
+/// The callback fires about every 256 folders — frequent enough for a smooth
+/// bar, rare enough that the channel is not the bottleneck.
+pub fn scan_with_progress<F>(root: &Path, mut on_progress: F) -> ScanReport
+where
+    F: FnMut(ScanProgress),
+{
     let started = Instant::now();
     let root_string = root.to_string_lossy().to_string();
 
@@ -62,6 +83,9 @@ pub fn scan(root: &Path) -> ScanReport {
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
     let mut skipped: u64 = 0;
+    let mut seen_folders: u64 = 0;
+    let mut seen_files: u64 = 0;
+    let mut seen_bytes: u64 = 0;
 
     while let Some(dir) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
@@ -114,6 +138,8 @@ pub fn scan(root: &Path) -> ScanReport {
             if let Ok(metadata) = entry.metadata() {
                 bytes += metadata.len();
                 files += 1;
+                seen_bytes += metadata.len();
+                seen_files += 1;
             }
         }
 
@@ -125,6 +151,16 @@ pub fn scan(root: &Path) -> ScanReport {
             files,
             has_package_json,
         });
+
+        seen_folders += 1;
+        if seen_folders % 256 == 0 {
+            on_progress(ScanProgress {
+                folders: seen_folders,
+                files: seen_files,
+                bytes: seen_bytes,
+                current: dir.to_string_lossy().to_string(),
+            });
+        }
     }
 
     // Fold direct sizes upward: a child path is always longer than its parent, so
