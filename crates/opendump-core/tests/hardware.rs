@@ -1,4 +1,4 @@
-use opendump_core::hardware::{memory, parse_nvidia_smi};
+use opendump_core::hardware::{disk_space, memory, parse_nvidia_smi};
 
 #[test]
 fn parses_an_nvidia_row_into_bytes() {
@@ -44,4 +44,17 @@ fn memory_reports_physical_ram() {
     assert!(memory.ram_total > 0, "no RAM reported");
     assert!(memory.ram_free <= memory.ram_total);
     // Not asserting `ram_free > 0`: a machine under extreme pressure may not.
+}
+
+#[test]
+fn disk_space_reports_a_volume_that_exists() {
+    let (total, free) = disk_space("C:\\").expect("C: must be readable");
+
+    assert!(total > 0, "no total size for C:");
+    assert!(free <= total, "free {free} exceeds total {total}");
+}
+
+#[test]
+fn disk_space_declines_a_volume_that_does_not_exist() {
+    assert!(disk_space("Q:\\definitely-not-a-volume").is_none());
 }

@@ -24,17 +24,19 @@ const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../.
 
 // ------------------------------------------------------------------- palette
 
-const BG: Color32 = Color32::from_rgb(0x08, 0x0b, 0x10);
-const PANEL: Color32 = Color32::from_rgb(0x0d, 0x13, 0x1b);
-const LINE: Color32 = Color32::from_rgb(0x1b, 0x27, 0x34);
-const TEXT: Color32 = Color32::from_rgb(0xe7, 0xee, 0xf8);
-const MUTED: Color32 = Color32::from_rgb(0x84, 0x97, 0xad);
-const DIM: Color32 = Color32::from_rgb(0x5c, 0x6b, 0x7f);
-const ACCENT: Color32 = Color32::from_rgb(0x38, 0xbd, 0xf8);
-const SAFE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
+const BG: Color32 = Color32::from_rgb(0x0a, 0x06, 0x07);
+const PANEL: Color32 = Color32::from_rgb(0x15, 0x0c, 0x0e);
+const LINE: Color32 = Color32::from_rgb(0x30, 0x1b, 0x1f);
+const TEXT: Color32 = Color32::from_rgb(0xf6, 0xec, 0xed);
+const MUTED: Color32 = Color32::from_rgb(0xab, 0x94, 0x98);
+const DIM: Color32 = Color32::from_rgb(0x77, 0x5e, 0x62);
+const ACCENT: Color32 = Color32::from_rgb(0xe0, 0x2b, 0x3c);
+/// Text that sits on `ACCENT` fills.
+const ON_ACCENT: Color32 = Color32::from_rgb(0xff, 0xf4, 0xf5);
+const SAFE: Color32 = Color32::from_rgb(0x2f, 0xc8, 0x6a);
 const REVIEW: Color32 = Color32::from_rgb(0xf5, 0x9e, 0x0b);
-const KEEP: Color32 = Color32::from_rgb(0x3b, 0x82, 0xf6);
-const LOCKED: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
+const KEEP: Color32 = Color32::from_rgb(0x4d, 0x8d, 0xf7);
+const LOCKED: Color32 = Color32::from_rgb(0xff, 0x2d, 0x55);
 
 // --------------------------------------------------------------------- model
 
@@ -56,15 +58,28 @@ struct NodeInfo {
 enum Pane {
     Map,
     Review,
+    Quarantine,
 }
 
-/// A laid-out rectangle in the treemap.
-struct Tile {
+/// One rectangle in the nested treemap. Parents are pushed before their
+/// children, so painting in order draws the levels on top of each other.
+struct Visual {
+    rect: egui::Rect,
     path: Option<String>,
     label: String,
     size: u64,
     tier: Option<Tier>,
+    depth: usize,
+    /// True when nothing was drawn inside this rectangle.
+    leaf: bool,
+}
+
+/// Layout is rebuilt only when the zoom root or the canvas changes: it is the
+/// one part of the map that is expensive, and it is recomputed on mouse move.
+struct MapCache {
+    root: String,
     rect: egui::Rect,
+    visuals: Vec<Visual>,
 }
 
 struct ScanView {
@@ -193,6 +208,9 @@ struct App {
     zoom: Option<String>,
     mem: Memory,
     probe_started: bool,
+    /// Total and free bytes on the scanned volume.
+    space: Option<(u64, u64)>,
+    map_cache: Option<MapCache>,
 }
 
 impl App {
@@ -211,6 +229,8 @@ impl App {
             zoom: None,
             mem: Memory::default(),
             probe_started: false,
+            space: None,
+            map_cache: None,
         }
     }
 
@@ -385,12 +405,17 @@ impl App {
                     self.scanning = false;
                     self.picked.clear();
                     self.scan = Some(view);
-                    // A new scan invalidates the previous zoom target.
+                    // A new scan invalidates the previous zoom target and layout.
                     self.zoom = None;
+                    self.map_cache = None;
                 }
                 Message::Staged(items) => self.staged = items,
                 Message::Action(text) => self.toast = Some((text, Instant::now())),
-                Message::Memory(memory) => self.mem = memory,
+                Message::Memory(memory) => {
+                    self.mem = memory;
+                    // Cheap syscall, and it has to move when a purge reclaims space.
+                    self.space = hardware::disk_space(&self.scan_root);
+                }
             }
         }
     }
@@ -468,10 +493,6 @@ fn metric(ui: &mut egui::Ui, label: &str, values: Option<(u64, u64)>) {
     );
 }
 
-fn file_name(path: &str) -> String {
-    path.rsplit(['\\', '/']).next().unwrap_or(path).to_string()
-}
-
 /// Trim a label to roughly fit a tile, keeping it readable with an ellipsis.
 fn clamp_label(text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
@@ -495,15 +516,231 @@ fn on_fill(fill: Color32) -> Color32 {
     }
 }
 
-/// Large areas in the vivid tier colour would be unreadable, so fills are dark
-/// tints and the vivid colour is kept for the tile's top edge.
-fn tile_tint(tier: Tier) -> Color32 {
-    match tier {
-        Tier::SafePurge => Color32::from_rgb(0x11, 0x3d, 0x27),
-        Tier::Review => Color32::from_rgb(0x3d, 0x2c, 0x0c),
-        Tier::Keep => Color32::from_rgb(0x10, 0x24, 0x45),
-        Tier::Locked => Color32::from_rgb(0x3a, 0x14, 0x14),
+/// Fill for one rectangle. Depth lifts the colour, the way v1 raised its alpha
+/// with depth, so nesting reads without drawing a border at every level.
+///
+/// The lift interpolates between two tints rather than toward white: adding
+/// equal amounts to every channel washes the hue out and the map reads grey.
+fn tile_fill(tier: Option<Tier>, depth: usize) -> Color32 {
+    let t = (depth.min(7) as f32) / 7.0;
+
+    let (near, far) = match tier {
+        Some(Tier::SafePurge) => ((0x18, 0x2c, 0x21), (0x2f, 0x6b, 0x47)),
+        Some(Tier::Review) => ((0x33, 0x24, 0x11), (0x76, 0x55, 0x1b)),
+        Some(Tier::Keep) => ((0x14, 0x20, 0x33), (0x2b, 0x49, 0x74)),
+        Some(Tier::Locked) => ((0x33, 0x11, 0x16), (0x7d, 0x22, 0x2d)),
+        None => ((0x24, 0x14, 0x16), (0x60, 0x34, 0x38)),
+    };
+
+    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+    Color32::from_rgb(
+        mix(near.0, far.0),
+        mix(near.1, far.1),
+        mix(near.2, far.2),
+    )
+}
+
+/// One legend swatch with its label.
+fn legend_item(ui: &mut egui::Ui, colour: Color32, text: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 2.0, colour);
+    ui.label(RichText::new(text).size(9.5).color(MUTED));
+    ui.add_space(10.0);
+}
+
+fn last_component(path: &str) -> &str {
+    let trimmed = path.trim_end_matches(['\\', '/']);
+    // A drive root has no final component; show "C:\" rather than nothing.
+    if trimmed.is_empty() || (trimmed.len() <= 2 && trimmed.ends_with(':')) {
+        return path;
     }
+    trimmed.rsplit(['\\', '/']).next().unwrap_or(trimmed)
+}
+
+/// Recursively lay a folder out inside `rect`, then its children inside each
+/// child, until a rectangle is too small to read.
+///
+/// This is the difference between a chart and a map: v1 drew every leaf at
+/// once, so one glance showed four levels of structure. Returns true when at
+/// least one child rectangle was drawn.
+fn build_visuals(
+    view: &ScanView,
+    path: &str,
+    size: u64,
+    rect: egui::Rect,
+    depth: usize,
+    out: &mut Vec<Visual>,
+) -> bool {
+    const MAX_DEPTH: usize = 9;
+    const MAX_TILES: usize = 12_000;
+
+    if depth >= MAX_DEPTH || out.len() >= MAX_TILES {
+        return false;
+    }
+    if rect.width() < 9.0 || rect.height() < 9.0 {
+        return false;
+    }
+
+    let Some(children) = view.levels.get(path) else {
+        return false;
+    };
+    if children.is_empty() {
+        return false;
+    }
+
+    struct Item<'a> {
+        path: Option<&'a str>,
+        label: &'a str,
+        size: u64,
+        tier: Option<Tier>,
+    }
+
+    let mut sum = 0u64;
+    for child in children {
+        if let Some(node) = view.nodes.get(child) {
+            sum += node.size;
+        }
+    }
+    let direct = size.saturating_sub(sum);
+
+    // Local floor: relative to this folder, not the drive, so deep levels stay
+    // populated instead of going blank.
+    let floor = (size as f64 * 0.0006).max(1.0) as u64;
+
+    let mut items: Vec<Item> = Vec::new();
+    let mut small = 0u64;
+    for child in children {
+        let Some(node) = view.nodes.get(child) else {
+            continue;
+        };
+        if node.size < floor {
+            small += node.size;
+            continue;
+        }
+        items.push(Item {
+            path: Some(child.as_str()),
+            label: last_component(child),
+            size: node.size,
+            tier: node.tier,
+        });
+    }
+    if small > 0 {
+        items.push(Item {
+            path: None,
+            label: "smaller",
+            size: small,
+            tier: None,
+        });
+    }
+    if direct > 0 {
+        items.push(Item {
+            path: None,
+            label: "files",
+            size: direct,
+            tier: None,
+        });
+    }
+    if items.is_empty() {
+        return false;
+    }
+
+    items.sort_by(|left, right| right.size.cmp(&left.size));
+
+    let areas: Vec<f64> = items.iter().map(|item| item.size as f64).collect();
+    let boxes = squarify(
+        &areas,
+        Box4::new(
+            rect.min.x as f64,
+            rect.min.y as f64,
+            rect.width() as f64,
+            rect.height() as f64,
+        ),
+    );
+
+    let mut drew = false;
+    for (item, area) in items.into_iter().zip(boxes) {
+        let tile = egui::Rect::from_min_size(
+            egui::pos2(area.x as f32, area.y as f32),
+            egui::vec2(area.w as f32, area.h as f32),
+        );
+        if tile.width() < 2.0 || tile.height() < 2.0 {
+            continue;
+        }
+
+        let child_path = item.path;
+        out.push(Visual {
+            rect: tile,
+            path: child_path.map(str::to_string),
+            label: item.label.to_string(),
+            size: item.size,
+            tier: item.tier,
+            depth,
+            leaf: true,
+        });
+        let index = out.len() - 1;
+
+        if let Some(child_path) = child_path {
+            // The top level keeps a strip for its own label; without it the
+            // children paint over the name and the map loses its landmarks.
+            let inner = if depth == 0 {
+                egui::Rect::from_min_max(
+                    egui::pos2(tile.min.x + 1.5, tile.min.y + 15.0),
+                    egui::pos2(tile.max.x - 1.5, tile.max.y - 1.5),
+                )
+            } else {
+                tile.shrink(1.5)
+            };
+            if build_visuals(view, child_path, item.size, inner, depth + 1, out) {
+                out[index].leaf = false;
+            }
+        }
+
+        drew = true;
+    }
+
+    drew
+}
+
+/// Free space on the scanned volume, with the bar v1 had in its header.
+fn space_meter(ui: &mut egui::Ui, space: Option<(u64, u64)>) {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+    let Some((total, free)) = space else {
+        return;
+    };
+    if total == 0 {
+        return;
+    }
+
+    let used = total.saturating_sub(free);
+    let ratio = (used as f64 / total as f64) as f32;
+    let colour = if ratio > 0.92 {
+        LOCKED
+    } else if ratio > 0.82 {
+        REVIEW
+    } else {
+        ACCENT
+    };
+
+    // Fixed size on purpose: a nested layout inside the right-to-left header
+    // otherwise inherits no width and wraps one character per line.
+    ui.allocate_ui_with_layout(
+        egui::vec2(140.0, 30.0),
+        egui::Layout::top_down(egui::Align::RIGHT),
+        |ui| {
+            ui.label(
+                RichText::new(format!("{:.1} GB free", free as f64 / GB))
+                    .size(10.0)
+                    .color(TEXT),
+            );
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(140.0, 4.0), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 2.0, Color32::from_rgb(0x2c, 0x18, 0x1c));
+            let mut filled = rect;
+            filled.set_width(rect.width() * ratio.clamp(0.0, 1.0));
+            ui.painter().rect_filled(filled, 2.0, colour);
+        },
+    );
 }
 
 fn tier_color(tier: Tier) -> Color32 {
@@ -574,7 +811,8 @@ fn install_style(ctx: &egui::Context) {
     visuals.extreme_bg_color = BG;
     visuals.faint_bg_color = PANEL;
     visuals.override_text_color = Some(TEXT);
-    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(56, 189, 248, 48);
+    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(224, 43, 60, 56);
+    visuals.selection.stroke = egui::Stroke::new(1.0_f32, ACCENT);
 
     for widget in [
         &mut visuals.widgets.inactive,
@@ -588,10 +826,10 @@ fn install_style(ctx: &egui::Context) {
         widget.bg_fill = PANEL;
         widget.weak_bg_fill = PANEL;
     }
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x16, 0x20, 0x2c);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x16, 0x20, 0x2c);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(0x2a, 0x3b, 0x4f));
-    visuals.widgets.active.bg_fill = Color32::from_rgb(0x16, 0x20, 0x2c);
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x24, 0x12, 0x16);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x24, 0x12, 0x16);
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(0x53, 0x24, 0x2c));
+    visuals.widgets.active.bg_fill = Color32::from_rgb(0x24, 0x12, 0x16);
     visuals.widgets.noninteractive.bg_fill = PANEL;
     visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
     visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, MUTED);
@@ -648,7 +886,7 @@ impl eframe::App for App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let label = if self.scanning { "Scanning…" } else { "Scan C:\\" };
                         let button = egui::Button::new(
-                            RichText::new(label).color(Color32::from_rgb(0x04, 0x10, 0x19)).strong(),
+                            RichText::new(label).color(ON_ACCENT).strong(),
                         )
                         .fill(ACCENT)
                         .rounding(egui::Rounding::same(7.0));
@@ -667,9 +905,23 @@ impl eframe::App for App {
                         );
                         ui.add_space(14.0);
                         metric(ui, "ram", Some((self.mem.ram_free, self.mem.ram_total)));
+                        ui.add_space(18.0);
+                        space_meter(ui, self.space);
                     });
                 });
             });
+
+        if self.pane == Pane::Map && self.scan.is_some() {
+            egui::SidePanel::right("inspector")
+                .exact_width(304.0)
+                .resizable(false)
+                .frame(
+                    egui::Frame::none()
+                        .fill(BG)
+                        .inner_margin(egui::Margin::symmetric(14.0, 12.0)),
+                )
+                .show(ctx, |ui| self.inspector(ui));
+        }
 
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
@@ -681,9 +933,8 @@ impl eframe::App for App {
                 match self.pane {
                     Pane::Map => self.map(ui),
                     Pane::Review => self.review(ui, ctx),
+                    Pane::Quarantine => self.quarantine_panel(ui, ctx),
                 }
-                ui.add_space(14.0);
-                self.quarantine_panel(ui, ctx);
             });
 
         self.confirm_modal(ctx);
@@ -947,7 +1198,7 @@ impl App {
         }
 
         egui::ScrollArea::vertical()
-            .max_height(160.0)
+            .max_height((ui.available_height() - 96.0).max(140.0))
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for item in &self.staged {
@@ -969,13 +1220,40 @@ impl App {
     }
 
     fn tabs(&mut self, ui: &mut egui::Ui) {
+        let actionable = self
+            .scan
+            .as_ref()
+            .map(|view| {
+                view.candidates
+                    .iter()
+                    .filter(|c| c.tier == Tier::SafePurge || c.tier == Tier::Review)
+                    .count()
+            })
+            .unwrap_or(0);
+        let held = self
+            .staged
+            .iter()
+            .filter(|item| item.status == "quarantined")
+            .count();
+
+        let tabs = [
+            (Pane::Map, "MAP", 0usize),
+            (Pane::Review, "REVIEW", actionable),
+            (Pane::Quarantine, "QUARANTINE", held),
+        ];
+
         ui.horizontal(|ui| {
-            for (pane, label) in [(Pane::Map, "MAP"), (Pane::Review, "REVIEW")] {
+            for (pane, label, count) in tabs {
                 let active = self.pane == pane;
-                let text = RichText::new(label)
+                let text = if count > 0 {
+                    format!("{label}  {count}")
+                } else {
+                    label.to_string()
+                };
+                let rich = RichText::new(text)
                     .size(10.5)
                     .color(if active { TEXT } else { MUTED });
-                if ui.selectable_label(active, text).clicked() {
+                if ui.selectable_label(active, rich).clicked() {
                     self.pane = pane;
                 }
             }
@@ -984,16 +1262,13 @@ impl App {
 
     /// The treemap: area is bytes, colour is safety, click zooms.
     fn map(&mut self, ui: &mut egui::Ui) {
-        let Some(view) = self.scan.as_ref() else {
+        if self.scan.is_none() {
             ui.label(RichText::new("Scan the drive to draw the map.").color(MUTED));
             return;
-        };
+        }
 
-        let root = view.root.clone();
+        let root = self.scan.as_ref().unwrap().root.clone();
         let current = self.zoom.clone().unwrap_or_else(|| root.clone());
-        let node = view.nodes.get(&current);
-        let current_size = node.map(|n| n.size).unwrap_or(view.bytes);
-        let current_files = node.map(|n| n.files).unwrap_or(view.files);
 
         let mut zoom_out = false;
         let mut zoom_to: Option<String> = None;
@@ -1008,76 +1283,84 @@ impl App {
                     .size(11.0)
                     .color(MUTED),
             );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(format!(
-                        "{} · {} files",
-                        bytes(current_size),
-                        thousands(current_files)
-                    ))
-                    .size(10.5)
-                    .color(DIM),
-                );
-            });
         });
+        ui.add_space(4.0);
 
-        // Leave room for the quarantine strip below without needing a scroll area.
-        let height = (ui.available_height() - 150.0).max(220.0);
+        let height = (ui.available_height() - 26.0).max(200.0);
         let (canvas, response) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), height),
             egui::Sense::click(),
         );
 
-        let tiles = self.layout_tiles(view, &current, current_size, canvas);
+        self.ensure_visuals(&current, canvas);
+
+        let cache = self.map_cache.as_ref().unwrap();
+        let view = self.scan.as_ref().unwrap();
+        let current_size = view
+            .nodes
+            .get(&current)
+            .map(|node| node.size)
+            .unwrap_or(view.bytes);
+
         let painter = ui.painter_at(canvas);
         painter.rect_filled(canvas, egui::Rounding::same(6.0), PANEL);
 
-        for tile in &tiles {
-            if tile.rect.width() < 2.0 || tile.rect.height() < 2.0 {
+        for visual in &cache.visuals {
+            if visual.rect.width() < 1.5 || visual.rect.height() < 1.5 {
                 continue;
             }
 
-            let fill = tile
-                .tier
-                .map(tile_tint)
-                .unwrap_or(Color32::from_rgb(0x1c, 0x27, 0x35));
-            let rounding = egui::Rounding::same(3.0);
-            painter.rect_filled(tile.rect, rounding, fill);
+            let fill = tile_fill(visual.tier, visual.depth);
+            painter.rect_filled(visual.rect, 0.0, fill);
+            // A hairline in the page colour separates one level from the next.
+            painter.rect_stroke(visual.rect, 0.0, egui::Stroke::new(1.0_f32, BG));
 
-            // A vivid top edge carries the tier without making large areas loud.
-            if let Some(tier) = tile.tier {
-                let edge = egui::Rect::from_min_size(
-                    tile.rect.min,
-                    egui::vec2(tile.rect.width(), 3.0),
-                );
-                painter.rect_filled(edge, rounding, tier_color(tier));
-            }
-
-            if tile.rect.width() > 54.0 && tile.rect.height() > 20.0 {
-                let max = (tile.rect.width() / 6.4) as usize;
+            let roomy = visual.rect.width() > 54.0 && visual.rect.height() > 20.0;
+            if roomy && (visual.leaf || visual.depth == 0) {
+                let max = (visual.rect.width() / 6.4) as usize;
+                // Aggregate tiles are labelled quietly: "files" repeated at
+                // every level would read as loudly as a folder name.
+                let label_colour = if visual.path.is_none() {
+                    on_fill(fill).gamma_multiply(0.5)
+                } else {
+                    on_fill(fill)
+                };
                 painter.text(
-                    tile.rect.min + egui::vec2(6.0, 5.0),
+                    visual.rect.min + egui::vec2(6.0, 5.0),
                     egui::Align2::LEFT_TOP,
-                    clamp_label(&tile.label, max),
+                    clamp_label(&visual.label, max),
                     egui::FontId::monospace(10.5),
-                    on_fill(fill),
+                    label_colour,
                 );
-            }
-            if tile.rect.width() > 54.0 && tile.rect.height() > 38.0 {
-                painter.text(
-                    tile.rect.min + egui::vec2(6.0, 21.0),
-                    egui::Align2::LEFT_TOP,
-                    bytes(tile.size),
-                    egui::FontId::monospace(10.0),
-                    on_fill(fill).gamma_multiply(0.72),
-                );
+                if visual.rect.height() > 38.0 && visual.depth > 0 {
+                    painter.text(
+                        visual.rect.min + egui::vec2(6.0, 21.0),
+                        egui::Align2::LEFT_TOP,
+                        bytes(visual.size),
+                        egui::FontId::monospace(10.0),
+                        on_fill(fill).gamma_multiply(0.72),
+                    );
+                }
             }
         }
 
         if let Some(pos) = response.hover_pos() {
-            if let Some(tile) = tiles.iter().find(|tile| tile.rect.contains(pos)) {
-                let share = tile.size as f64 / current_size.max(1) as f64 * 100.0;
-                let matched = tile.path.as_ref().and_then(|path| {
+            // The deepest rectangle wins, as in v1: the leaf is what you meant.
+            if let Some(visual) = cache
+                .visuals
+                .iter()
+                .filter(|visual| visual.rect.contains(pos))
+                .max_by_key(|visual| visual.depth)
+            {
+                let share = visual.size as f64 / current_size.max(1) as f64 * 100.0;
+                let share_text = if share >= 0.1 {
+                    format!("{share:.1}%")
+                } else if share > 0.0 {
+                    "<0.1%".to_string()
+                } else {
+                    "0%".to_string()
+                };
+                let matched = visual.path.as_ref().and_then(|path| {
                     view.candidates
                         .iter()
                         .find(|candidate| &candidate.path == path)
@@ -1094,18 +1377,16 @@ impl App {
                         ui.set_min_width(240.0);
                         ui.set_max_width(420.0);
 
-                        // Full path here, not `pretty`: "~" alone is correct but
-                        // reads like a rendering failure when the tile _is_ the profile.
-                        let title = tile
+                        let title = visual
                             .path
                             .clone()
-                            .unwrap_or_else(|| tile.label.clone());
+                            .unwrap_or_else(|| visual.label.clone());
                         ui.label(RichText::new(title).monospace().size(11.5));
                         ui.label(
                             RichText::new(format!(
-                                "{} · {:.1}% of this folder",
-                                bytes(tile.size),
-                                share
+                                "{} · {} of this folder",
+                                bytes(visual.size),
+                                share_text
                             ))
                             .size(10.5)
                             .color(MUTED),
@@ -1117,7 +1398,7 @@ impl App {
                                     .color(tier_color(tier)),
                             );
                             ui.label(RichText::new(reason).size(10.5).color(DIM));
-                        } else if tile.path.is_some() {
+                        } else if visual.path.is_some() {
                             ui.label(
                                 RichText::new("no rule matched · not a candidate")
                                     .size(10.5)
@@ -1131,9 +1412,16 @@ impl App {
 
         if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
-                if let Some(tile) = tiles.iter().find(|tile| tile.rect.contains(pos)) {
-                    if let Some(path) = &tile.path {
-                        // Only zoom where there is something below to show.
+                // The deepest tile may be an aggregate ("files", "smaller"),
+                // which has no folder of its own. Zoom the folder that owns it
+                // instead of doing nothing.
+                if let Some(visual) = cache
+                    .visuals
+                    .iter()
+                    .filter(|visual| visual.rect.contains(pos) && visual.path.is_some())
+                    .max_by_key(|visual| visual.depth)
+                {
+                    if let Some(path) = &visual.path {
                         if view.levels.contains_key(path) {
                             zoom_to = Some(path.clone());
                         }
@@ -1151,92 +1439,145 @@ impl App {
         if let Some(path) = zoom_to {
             self.zoom = Some(path);
         }
+
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            for (tier, label) in [
+                (Tier::SafePurge, "Safe"),
+                (Tier::Review, "Review"),
+                (Tier::Keep, "Keep"),
+                (Tier::Locked, "Locked"),
+            ] {
+                legend_item(ui, tier_color(tier), label);
+            }
+            legend_item(ui, tile_fill(None, 7), "Unclassified");
+        });
     }
 
-    /// One level of the tree, as rectangles.
-    ///
-    /// Children smaller than a sliver of the canvas are folded into a single
-    /// tile rather than drawn as invisible hairlines, and bytes that live
-    /// directly in this folder (not in any child) get their own tile — otherwise
-    /// the level would not add up to the folder's total.
-    fn layout_tiles(
-        &self,
-        view: &ScanView,
-        current: &str,
-        current_size: u64,
-        canvas: egui::Rect,
-    ) -> Vec<Tile> {
-        let floor = (current_size as f64 * 0.0015) as u64;
-        let mut entries: Vec<Tile> = Vec::new();
-        let mut small = 0u64;
-        let mut child_sum = 0u64;
+    /// Rebuild the nested layout only when the root or the canvas changed.
+    fn ensure_visuals(&mut self, current: &str, canvas: egui::Rect) {
+        let stale = match &self.map_cache {
+            Some(cache) => cache.root != current || cache.rect != canvas,
+            None => true,
+        };
+        if !stale {
+            return;
+        }
 
-        if let Some(children) = view.levels.get(current) {
-            for path in children {
-                let Some(node) = view.nodes.get(path) else {
-                    continue;
-                };
-                child_sum += node.size;
-                if node.size < floor {
-                    small += node.size;
-                    continue;
-                }
-                entries.push(Tile {
-                    path: Some(path.clone()),
-                    label: file_name(path),
-                    size: node.size,
-                    tier: node.tier,
-                    rect: egui::Rect::NOTHING,
+        let view = self.scan.as_ref().unwrap();
+        let size = view
+            .nodes
+            .get(current)
+            .map(|node| node.size)
+            .unwrap_or(view.bytes);
+
+        let mut visuals = Vec::new();
+        build_visuals(view, current, size, canvas, 0, &mut visuals);
+
+        self.map_cache = Some(MapCache {
+            root: current.to_string(),
+            rect: canvas,
+            visuals,
+        });
+    }
+
+    /// The right-hand panel: what is inside the folder you are looking at.
+    fn inspector(&mut self, ui: &mut egui::Ui) {
+        let Some(view) = self.scan.as_ref() else {
+            return;
+        };
+
+        let root = view.root.clone();
+        let current = self.zoom.clone().unwrap_or_else(|| root.clone());
+        let node = view.nodes.get(&current);
+        let size = node.map(|node| node.size).unwrap_or(view.bytes);
+        let files = node.map(|node| node.files).unwrap_or(view.files);
+        let share = size as f64 / view.bytes.max(1) as f64 * 100.0;
+
+        let mut go: Option<String> = None;
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(last_component(&current)).strong().size(13.5));
+                    if self.zoom.is_some() && ui.button("Up").clicked() {
+                        go = parent_of(&current);
+                    }
                 });
-            }
-        }
+                ui.label(RichText::new(&current).monospace().size(9.5).color(DIM));
 
-        if small > 0 {
-            entries.push(Tile {
-                path: None,
-                label: "smaller folders".to_string(),
-                size: small,
-                tier: None,
-                rect: egui::Rect::NOTHING,
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    stat(ui, "size", &bytes(size));
+                    stat(ui, "of drive", &format!("{share:.1}%"));
+                    stat(ui, "files", &thousands(files));
+                });
+
+                ui.add_space(12.0);
+                ui.label(RichText::new("CONTENTS").size(9.5).color(DIM));
+                ui.add_space(4.0);
+
+                match view.levels.get(&current) {
+                    Some(children) if !children.is_empty() => {
+                        for child in children.iter().take(200) {
+                            let Some(node) = view.nodes.get(child) else {
+                                continue;
+                            };
+                            ui.horizontal(|ui| {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(7.0, 7.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    rect,
+                                    2.0,
+                                    node.tier.map(tier_color).unwrap_or(DIM),
+                                );
+                                let label =
+                                    RichText::new(last_component(child)).size(11.0).color(TEXT);
+                                if ui.selectable_label(false, label).clicked() {
+                                    go = Some(child.clone());
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            RichText::new(bytes(node.size))
+                                                .monospace()
+                                                .size(10.5)
+                                                .color(MUTED),
+                                        );
+                                    },
+                                );
+                            });
+                        }
+                        if children.len() > 200 {
+                            ui.label(
+                                RichText::new(format!("+{} more", children.len() - 200))
+                                    .size(10.0)
+                                    .color(DIM),
+                            );
+                        }
+                    }
+                    _ => {
+                        ui.label(
+                            RichText::new("Nothing above the display threshold.")
+                                .size(10.5)
+                                .color(DIM),
+                        );
+                    }
+                }
+
+                ui.add_space(12.0);
+                if ui.button("Reveal in Explorer").clicked() {
+                    let _ = std::process::Command::new("explorer").arg(&current).spawn();
+                }
             });
+
+        if let Some(path) = go {
+            self.zoom = if path == root { None } else { Some(path) };
         }
-
-        let direct = current_size.saturating_sub(child_sum);
-        if direct > 0 {
-            entries.push(Tile {
-                path: None,
-                label: "files in this folder".to_string(),
-                size: direct,
-                tier: None,
-                rect: egui::Rect::NOTHING,
-            });
-        }
-
-        let areas: Vec<f64> = entries.iter().map(|tile| tile.size as f64).collect();
-        let boxes = squarify(
-            &areas,
-            Box4::new(
-                canvas.min.x as f64,
-                canvas.min.y as f64,
-                canvas.width() as f64,
-                canvas.height() as f64,
-            ),
-        );
-
-        for (tile, area) in entries.iter_mut().zip(boxes) {
-            let rect = egui::Rect::from_min_size(
-                egui::pos2(area.x as f32, area.y as f32),
-                egui::vec2(area.w as f32, area.h as f32),
-            );
-            // A hairline gutter keeps neighbouring tiles legible.
-            tile.rect = if rect.width() > 4.0 && rect.height() > 4.0 {
-                rect.shrink(1.0)
-            } else {
-                rect
-            };
-        }
-
-        entries
     }
 
     /// The last screen before data stops existing.

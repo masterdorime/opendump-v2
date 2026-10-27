@@ -154,3 +154,41 @@ pub fn query_gpu() -> Option<Gpu> {
 pub fn query_gpu() -> Option<Gpu> {
     None
 }
+
+/// Total and free bytes on the volume that contains `path`.
+#[cfg(windows)]
+pub fn disk_space(path: &str) -> Option<(u64, u64)> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            free_to_caller: *mut u64,
+            total: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+    }
+
+    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut free_to_caller = 0u64;
+    let mut total = 0u64;
+    let mut total_free = 0u64;
+
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_to_caller,
+            &mut total,
+            &mut total_free,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+
+    Some((total, free_to_caller))
+}
+
+#[cfg(not(windows))]
+pub fn disk_space(_path: &str) -> Option<(u64, u64)> {
+    None
+}
