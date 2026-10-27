@@ -6,9 +6,9 @@ anything; it records the invariants and the traps that already cost time once.
 **Companion repo (read its `AGENTS.md` for the full story):**
 `C:\Users\TRISTAN\drive size audit` → https://github.com/masterdorime/opendump — the Electron
 app that is still the shipped product (v0.5.0, 5 releases). This repo has **no release** and
-should not be handed to a user as their daily driver yet: no treemap, no tour, no AI.
+should not be handed to a user as their daily driver yet: no tour, no AI, no scan cache.
 
-**Last updated:** 2026-10-27 · last code commit `90ea880` (docs commits follow) · working tree
+**Last updated:** 2026-10-27 · last code commit `171017e` (docs commits follow) · working tree
 clean · CI green.
 
 ---
@@ -18,10 +18,10 @@ clean · CI green.
 | | |
 | --- | --- |
 | Version | 0.1.0, unreleased |
-| Tests | **28** (`cargo test --workspace`) |
-| Lines | **3,121** Rust |
-| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.29 MB |
-| Measured | full `C:\` scan **91.7–102.8 s**, **89 MB** idle RAM (one process), 107 MB after a scan |
+| Tests | **35** (`cargo test --workspace`) |
+| Lines | **3,688** Rust |
+| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.36 MB |
+| Measured | full `C:\` scan **88.6–134 s** (load-dependent), **89 MB** idle RAM (one process), 107 MB after a scan |
 
 Correctness anchor: totals match `robocopy /L` exactly on `Users` (223.1 GB / 999,946 files),
 `Windows`, `ProgramData`, `Program Files`.
@@ -31,27 +31,30 @@ Correctness anchor: totals match `robocopy /L` exactly on `Users` (223.1 GB / 99
 ## 2. Layout
 
 ```
-crates/opendump-core/   1,334 src + 467 test lines
+crates/opendump-core/   1,519 src + 491 test lines
   types.rs      Tier · Rule · RuleMatch · DirEntry
   tokens.rs     %LOCALAPPDATA%-style expansion, injectable map (tests rely on this)
-  rules.rs      compile · AND matchers · find_candidates · parent_of/depth_of (pub(crate))
+  rules.rs      compile · AND matchers · find_candidates · parent_of/depth_of (public)
   scan.rs       recursive walk; one public fn scan(root) -> ScanReport
   executor.rs   quarantine · restore · purge · journal · inspect_staged
+  layout.rs     squarified treemap over plain Box4 rects — no UI dependency
   format.rs     bytes() · thousands()  — shared by CLI and window, do not duplicate
 
 crates/opendump-cli/    448 lines   opendump.exe
-apps/native/            872 lines   opendump-native.exe (egui + glow)
+apps/native/            1,230 lines opendump-native.exe (egui + glow)
 ```
 
 `apps/native/src/main.rs` is one file on purpose:
 
 ```
 consts    BG PANEL LINE TEXT MUTED DIM ACCENT + SAFE REVIEW KEEP LOCKED  (whole palette)
-structs   ScanView · StagedView · ConfirmState · Message
-impl App  lines 165–316   logic:  start_scan · quarantine_picked · restore_all · purge_ids · drain
-impl      eframe::App     update()
-impl App  lines 497–889   views:  summary · review · quarantine_panel · confirm_modal
-helpers   pretty · tier_color · tier_label · install_fonts · install_style · stat · selftest · main
+structs   NodeInfo · Pane · Tile · ScanView · StagedView · ConfirmState · Message
+impl App  195–394    logic:  start_scan · quarantine_picked · restore_all · purge_ids · drain
+helpers   396–536    pretty · file_name · clamp_label · on_fill · tile_tint · tier_color · …
+impl      eframe::App  update()
+impl App  619–1282   views:  summary · review · quarantine_panel · tabs · map ·
+                             layout_tiles · confirm_modal
+helpers   stat · selftest · main
 ```
 
 Work runs on `std::thread`; results come back as `Message` over an `mpsc` channel and are
@@ -125,12 +128,17 @@ rebuild before the window sees it. The CLI reads it from disk (cwd, beside the e
    full-screen area.
 4. **`scan()` returns a flat `Vec<DirEntry>`** (`path`, recursive `size`, `files`,
    `has_package_json`) — no parent links, no children. `ScanReport` is
-   `{ root, dirs, total_bytes, total_files, skipped, duration_ms }`.
-5. **The native app throws `report.dirs` away** after `find_candidates(..., 1024 * 1024)`.
-   `ScanView` keeps only root/folders/files/bytes/duration/candidates. Anything tree-shaped
-   (treemap) must retain the directories first.
-6. **`parent_of` / `depth_of` are `pub(crate)`** in `rules.rs`. Group-by-parent needs them `pub`.
-7. **Path checks, not string checks.** `%LOCALAPPDATA%`-style tokens are expanded through the
+   `{ root, dirs, total_bytes, total_files, skipped, duration_ms }`. The treemap builds its own
+   tree from this in the scan thread; do not expect one from the scanner.
+5. **The node graph is pruned on purpose.** `nodes`/`levels` keep directories above
+   `total_bytes / 200_000`, clamped to 2 MB. Parents are always at least as large as their
+   children, so nothing reachable is lost — but a folder whose contents are all small will show
+   only a "files in this folder" tile.
+6. **`depth_of` is a separator count, not a level number.** `C:\` and `C:\Users` both report 1.
+   Only sort order relies on it; do not use it to compare nesting.
+7. **`parent_of` and `depth_of` are public** because the map groups by parent. `parent_of`
+   normalises both separators and returns `None` at a drive root.
+8. **Path checks, not string checks.** `%LOCALAPPDATA%`-style tokens are expanded through the
    injectable map in `tokens.rs` — tests inject a fake map, so never call `std::env` directly in
    that path.
 
@@ -138,14 +146,16 @@ rebuild before the window sees it. The CLI reads it from disk (cwd, beside the e
 
 ## 7. What is next
 
-**Treemap.** The signature view and the only obvious missing feature. Suggested order: make
-`parent_of`/`depth_of` public → retain a pruned `dirs` subset in `ScanView` (drop under ~0.02 %
-of the root, as v1 does) → group children by parent → squarify into `egui::Rect`s → paint with
-`ui.painter().rect_filled()` → hover tooltip, click-to-zoom, breadcrumb. Visual reference:
-v1's `src/renderer/src/components/Treemap.tsx` (d3 squarified).
+**Live RAM/VRAM meters.** v2 has no hardware probe at all. Port the idea from v1's
+`src/shared/ai/hardware.ts` and `src/shared/system.ts`: total and free RAM and VRAM, polled on a
+timer, cheap enough to leave running while idle. RAM is the AI gate, so this comes before the
+panel.
 
-Then, in order: live RAM/VRAM meters (v2 has no hardware probe at all; RAM is the AI gate),
-guided tour (v1 `TourOverlay.tsx`), AI panel (v1 `src/shared/ai/*`), MFT scanner.
+Then: guided tour (v1 `TourOverlay.tsx`), AI panel (v1 `src/shared/ai/*`), MFT scanner.
+
+The treemap shipped in `171017e`: MAP/REVIEW tabs, hover shows path/size/share/reason, click
+zooms, `‹ up` returns. Extend it in `map()` and `layout_tiles()`; the maths lives in
+`core::layout::squarify` with its own tests, so a layout change there runs under `cargo test`.
 
 Beyond the UI, the highest-value work in either repo is the **inspection layer** — reading
 folder contents instead of guessing from names. That is v1 work today.
@@ -167,7 +177,7 @@ folder contents instead of guessing from names. That is v1 work today.
 
 - Add a webview front end. A Tauri shell was built and deleted: 9.98 MB exe, but 316 MB of
   WebView2 at runtime, and it duplicated the window that already existed.
-- Claim this is ready for users. It has no treemap, no tour, no AI, no signed build, and has
-  only ever run on one machine at one DPI.
+- Claim this is ready for users. It has no tour, no AI, no scan cache and no signed build, and
+  has only ever run on one machine at one DPI.
 - Round-trip source through PowerShell — `Set-Content -Encoding utf8` writes a BOM and
   `Get-Content`/`Set-Content` mangles non-ASCII. Use the editor tools or Node with `utf8`.
