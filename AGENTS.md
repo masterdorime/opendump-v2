@@ -8,7 +8,7 @@ anything; it records the invariants and the traps that already cost time once.
 app that is still the shipped product (v0.5.0, 5 releases). This repo has **no release** and
 should not be handed to a user as their daily driver yet: no tour, no AI, no scan cache.
 
-**Last updated:** 2026-10-27 · last code commit `502734b` (docs commits follow) · working tree
+**Last updated:** 2026-10-27 · last code commit `806f258` (docs commits follow) · working tree
 clean · CI green.
 
 ---
@@ -18,10 +18,13 @@ clean · CI green.
 | | |
 | --- | --- |
 | Version | 0.1.0, unreleased |
-| Tests | **41** (`cargo test --workspace`) |
-| Lines | **3,966** Rust |
-| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.39 MB |
-| Measured | full `C:\` scan **88.6–134 s** (load-dependent), **89 MB** idle RAM (one process), 107 MB after a scan |
+| Tests | **43** (`cargo test --workspace`) |
+| Lines | **4,317** Rust |
+| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.43 MB |
+| Measured | full `C:\` scan **72–134 s** (load-dependent), **89 MB** idle, **130 MB** with a full map drawn |
+
+The window now has v1's shell: red dark theme, three peer views with count pills, a nested
+treemap, an inspector sidebar, and a free-space meter.
 
 Correctness anchor: totals match `robocopy /L` exactly on `Users` (223.1 GB / 999,946 files),
 `Windows`, `ProgramData`, `Program Files`.
@@ -45,17 +48,16 @@ crates/opendump-cli/    448 lines   opendump.exe
 apps/native/            1,331 lines opendump-native.exe (egui + glow)
 ```
 
-`apps/native/src/main.rs` is one file on purpose:
+`apps/native/src/main.rs` is one file on purpose. Grep the function name; line numbers drift
+every session and were removed here on purpose:
 
 ```
-consts    BG PANEL LINE TEXT MUTED DIM ACCENT + SAFE REVIEW KEEP LOCKED  (whole palette)
-structs   NodeInfo · Pane · Tile · ScanView · StagedView · ConfirmState · Message
-impl App  198–412    logic:  start_scan · quarantine_picked · restore_all · purge_ids · drain
-helpers   414–603    spawn_probe · metric · pretty · file_name · clamp_label · on_fill · tile_tint
-impl      eframe::App  update()
-impl App  706–1369   views:  summary · review · quarantine_panel · tabs · map ·
-                             layout_tiles · confirm_modal
-helpers   stat · print_memory · selftest · main
+consts    BG PANEL LINE TEXT MUTED DIM ACCENT + SAFE REVIEW KEEP LOCKED + ON_ACCENT
+structs   NodeInfo · Pane(Map/Review/Quarantine) · Visual · MapCache · ScanView · ConfirmState
+logic     start_scan · quarantine_picked · restore_all · purge_ids · drain · ensure_visuals
+views     summary · review · quarantine_panel · tabs · map · inspector · confirm_modal
+helpers   build_visuals (recursive squarify) · tile_fill (depth lift) · space_meter · metric ·
+          spawn_probe · pretty · last_component · clamp_label · on_fill · legend_item · stat
 ```
 
 Work runs on `std::thread`; results come back as `Message` over an `mpsc` channel and are
@@ -156,11 +158,11 @@ rebuild before the window sees it. The CLI reads it from disk (cwd, beside the e
 copy, everything else dimmed. In egui the dim is a `layer_painter` fill plus a hole — and note
 trap 3 above, an `Area`'s painter is clipped to its own content.
 
-Then: AI panel (v1 `src/shared/ai/*`), MFT scanner.
+Then: AI panel (v1 `src/shared/ai/*`), scan cache (v1 opens in milliseconds, v2 rescans for
+~90 s every launch), MFT scanner.
 
-Already shipped: the treemap (`171017e` — MAP/REVIEW tabs, hover detail, click-to-zoom; maths in
-`core::layout`) and the memory meters (`502734b` — `core::hardware`, RAM every 1.5 s, VRAM every
-~6 s on a background thread, em dash rather than a guess).
+Already shipped: treemap (`171017e`), memory meters (`502734b`), and the v1-parity shell in
+`806f258` — red theme, nested treemap, inspector, three views, free-space meter.
 
 Beyond the UI, the highest-value work in either repo is the **inspection layer** — reading
 folder contents instead of guessing from names. That is v1 work today.
