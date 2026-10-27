@@ -8,7 +8,7 @@ anything; it records the invariants and the traps that already cost time once.
 app that is still the shipped product (v0.5.0, 5 releases). This repo has **no release** and
 should not be handed to a user as their daily driver yet: no tour, no AI, no scan cache.
 
-**Last updated:** 2026-10-27 · last code commit `171017e` (docs commits follow) · working tree
+**Last updated:** 2026-10-27 · last code commit `502734b` (docs commits follow) · working tree
 clean · CI green.
 
 ---
@@ -18,9 +18,9 @@ clean · CI green.
 | | |
 | --- | --- |
 | Version | 0.1.0, unreleased |
-| Tests | **35** (`cargo test --workspace`) |
-| Lines | **3,688** Rust |
-| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.36 MB |
+| Tests | **41** (`cargo test --workspace`) |
+| Lines | **3,966** Rust |
+| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.39 MB |
 | Measured | full `C:\` scan **88.6–134 s** (load-dependent), **89 MB** idle RAM (one process), 107 MB after a scan |
 
 Correctness anchor: totals match `robocopy /L` exactly on `Users` (223.1 GB / 999,946 files),
@@ -31,17 +31,18 @@ Correctness anchor: totals match `robocopy /L` exactly on `Users` (223.1 GB / 99
 ## 2. Layout
 
 ```
-crates/opendump-core/   1,519 src + 491 test lines
+crates/opendump-core/   1,657 src + 530 test lines
   types.rs      Tier · Rule · RuleMatch · DirEntry
   tokens.rs     %LOCALAPPDATA%-style expansion, injectable map (tests rely on this)
   rules.rs      compile · AND matchers · find_candidates · parent_of/depth_of (public)
   scan.rs       recursive walk; one public fn scan(root) -> ScanReport
   executor.rs   quarantine · restore · purge · journal · inspect_staged
   layout.rs     squarified treemap over plain Box4 rects — no UI dependency
+  hardware.rs   GlobalMemoryStatusEx for RAM, nvidia-smi for free VRAM
   format.rs     bytes() · thousands()  — shared by CLI and window, do not duplicate
 
 crates/opendump-cli/    448 lines   opendump.exe
-apps/native/            1,230 lines opendump-native.exe (egui + glow)
+apps/native/            1,331 lines opendump-native.exe (egui + glow)
 ```
 
 `apps/native/src/main.rs` is one file on purpose:
@@ -49,12 +50,12 @@ apps/native/            1,230 lines opendump-native.exe (egui + glow)
 ```
 consts    BG PANEL LINE TEXT MUTED DIM ACCENT + SAFE REVIEW KEEP LOCKED  (whole palette)
 structs   NodeInfo · Pane · Tile · ScanView · StagedView · ConfirmState · Message
-impl App  195–394    logic:  start_scan · quarantine_picked · restore_all · purge_ids · drain
-helpers   396–536    pretty · file_name · clamp_label · on_fill · tile_tint · tier_color · …
+impl App  198–412    logic:  start_scan · quarantine_picked · restore_all · purge_ids · drain
+helpers   414–603    spawn_probe · metric · pretty · file_name · clamp_label · on_fill · tile_tint
 impl      eframe::App  update()
-impl App  619–1282   views:  summary · review · quarantine_panel · tabs · map ·
+impl App  706–1369   views:  summary · review · quarantine_panel · tabs · map ·
                              layout_tiles · confirm_modal
-helpers   stat · selftest · main
+helpers   stat · print_memory · selftest · main
 ```
 
 Work runs on `std::thread`; results come back as `Message` over an `mpsc` channel and are
@@ -78,7 +79,8 @@ cargo run --release -- purge --all --yes
 cd apps/native
 cargo run --release              # opens empty
 cargo run --release -- --scan    # scanning on open
-cargo run --release -- --selftest  # headless scan + classify + print, no window
+cargo run --release -- --selftest  # headless scan + classify + print
+cargo run --release -- --probe     # RAM/VRAM only, no scan (fast), no window
 ```
 
 User data: `%APPDATA%\opendump-native\` — `journal.jsonl`, `quarantine\<batch>\…`. Deliberately
@@ -141,21 +143,24 @@ rebuild before the window sees it. The CLI reads it from disk (cwd, beside the e
 8. **Path checks, not string checks.** `%LOCALAPPDATA%`-style tokens are expanded through the
    injectable map in `tokens.rs` — tests inject a fake map, so never call `std::env` directly in
    that path.
+9. **A nested `ui.vertical` inside a right-to-left layout inherits almost no width** and wraps
+   its text to one character per line — and the parent bar grows to fit. That is why the memory
+   meters are single labels. Same family as trap 3: an egui child does not get the width you
+   assume. Screenshot the header after touching it.
 
 ---
 
 ## 7. What is next
 
-**Live RAM/VRAM meters.** v2 has no hardware probe at all. Port the idea from v1's
-`src/shared/ai/hardware.ts` and `src/shared/system.ts`: total and free RAM and VRAM, polled on a
-timer, cheap enough to leave running while idle. RAM is the AI gate, so this comes before the
-panel.
+**Guided tour.** v1's `TourOverlay.tsx` is the reference: steps with a target rect, heading and
+copy, everything else dimmed. In egui the dim is a `layer_painter` fill plus a hole — and note
+trap 3 above, an `Area`'s painter is clipped to its own content.
 
-Then: guided tour (v1 `TourOverlay.tsx`), AI panel (v1 `src/shared/ai/*`), MFT scanner.
+Then: AI panel (v1 `src/shared/ai/*`), MFT scanner.
 
-The treemap shipped in `171017e`: MAP/REVIEW tabs, hover shows path/size/share/reason, click
-zooms, `‹ up` returns. Extend it in `map()` and `layout_tiles()`; the maths lives in
-`core::layout::squarify` with its own tests, so a layout change there runs under `cargo test`.
+Already shipped: the treemap (`171017e` — MAP/REVIEW tabs, hover detail, click-to-zoom; maths in
+`core::layout`) and the memory meters (`502734b` — `core::hardware`, RAM every 1.5 s, VRAM every
+~6 s on a background thread, em dash rather than a guess).
 
 Beyond the UI, the highest-value work in either repo is the **inspection layer** — reading
 folder contents instead of guessing from names. That is v1 work today.
