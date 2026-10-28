@@ -52,7 +52,7 @@ talks to Win32 directly and there is no webview.
   and everything else works; the app never downloads or starts a model itself.
 
 ```bash
-cargo test          # 62 tests across core, CLI and the window
+cargo test          # 73 tests across core, CLI and the window
 cargo build --release
 ```
 
@@ -171,18 +171,17 @@ cargo run --release -- --selftest   # headless: scan, classify, print, exit
 Purge is armed rather than immediate: the button reads "Purge all", then "Confirm: delete 12.4
 GB?" on the second click. Deleting staged data is the one action with no undo.
 
-What it is not: egui's stock widgets do not match a hand-styled CSS interface pixel for pixel,
-and the treemap, guided tour and filename-by-filename confirmation are still only in v0.5. The
-look is close — same palette, same rows, same tier colours — but it is a reimplementation.
+What it is not: egui's stock widgets do not match a hand-styled CSS interface pixel for pixel.
+The look is close — same palette, same rows, same tier colours — but it is a reimplementation.
+The guided tour and the cloud AI provider are still only in v0.5.
 
 ## What is not here yet
 
-- **v0.5's UI** — treemap, spotlight tour, purge confirmation listing filenames, live memory meters
-- **AI layer** — Ollama provider, hardware gating
-- **`find_unclassified`** — the AI's target set
-- **The MFT scanner** — the current walk uses `read_dir`. Parsing `$MFT` directly is the next
-  step and the real reason for Rust; `scan.rs` is written so it can be replaced without touching
-  `rules.rs`.
+- **Guided tour** — v0.5's spotlight overlay
+- **Cloud AI provider** — wired, never tested against a live endpoint
+- **Multi-drive staging** — v0.5 stages on any volume
+- **Elevated tier** — `hiberfil.sys`, the Windows Update cache, DISM
+- **A release** — no installer and no signed build, so today you need Rust to run this
 
 The engine is complete enough to scan, classify, quarantine, restore and purge from either a
 terminal or a window.
@@ -190,7 +189,7 @@ terminal or a window.
 ## Build
 
 ```bash
-cargo test                      # 26 tests (workspace)
+cargo test                      # 73 tests (workspace)
 cargo build --release
 ```
 
