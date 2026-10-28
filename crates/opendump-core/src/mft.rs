@@ -18,7 +18,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::time::Instant;
 
-use crate::scan::ScanReport;
+use crate::scan::{ScanReport, SKIP_NAMES};
 use crate::types::DirEntry;
 
 const MFT_RECORD_MAGIC: u32 = 0x454c_4946; // "FILE"
@@ -127,13 +127,34 @@ pub fn apply_fixup(record: &mut [u8], bytes_per_sector: u64) -> bool {
     true
 }
 
-/// Walk one MFT record and pull out the name, parent, flags and size.
-///
-/// Returns `None` for records that are free, metadata, or have no usable
-/// file name. Uses `$FILE_NAME`'s logical size, which is what the filesystem
-/// reports for the file — not the on-disk allocation.
-pub fn parse_record(record: &[u8], bytes_per_sector: u64, stats: &mut ReadStats) -> Option<FileRecord> {
+/// One $FILE_NAME attribute: a path for a file or directory. A file with hard
+/// links has several, and the walk would have counted each of those paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameAttr {
+    pub parent: u64,
+    pub name: String,
+    pub is_dir: bool,
+    pub reparse: bool,
+    pub size: u64,
+}
+
+/// What one MFT record contains, before it becomes path records.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedRecord {
+    /// Non-zero when this record is an extension of another (attribute list).
+    pub base: u64,
+    pub names: Vec<NameAttr>,
+    pub data_size: Option<u64>,
+}
+
+/// Read one MFT record: every usable name, and the unnamed data stream's size.
+pub fn parse_record(
+    record: &[u8],
+    bytes_per_sector: u64,
+    stats: &mut ReadStats,
+) -> Option<ParsedRecord> {
     stats.records += 1;
+
     if record.len() < 48 {
         return None;
     }
@@ -151,14 +172,20 @@ pub fn parse_record(record: &[u8], bytes_per_sector: u64, stats: &mut ReadStats)
     let flags = u16::from_le_bytes([buffer[0x16], buffer[0x17]]);
     if flags & 0x01 == 0 {
         stats.not_in_use += 1;
-        return None; // not in use
+        return None;
     }
     stats.in_use += 1;
 
+    let base = u64::from_le_bytes(buffer[0x20..0x28].try_into().unwrap_or([0; 8]))
+        & 0x0000_FFFF_FFFF_FFFF;
+
     let first_attribute = u16::from_le_bytes([buffer[0x14], buffer[0x15]]) as usize;
     let mut offset = first_attribute;
-    let mut found: Option<FileRecord> = None;
-    let mut data_size: Option<u64> = None;
+    let mut parsed = ParsedRecord {
+        base,
+        names: Vec::new(),
+        data_size: None,
+    };
 
     while offset + 16 <= buffer.len() {
         let kind = u32::from_le_bytes(buffer[offset..offset + 4].try_into().ok()?);
@@ -171,28 +198,44 @@ pub fn parse_record(record: &[u8], bytes_per_sector: u64, stats: &mut ReadStats)
         }
 
         // An attribute list means some attributes live in extension records. The
-        // base record still holds the name and usually the data, and dropping it
-        // orphans the whole subtree - WinSxS is the proof.
+        // base record still holds a name, and dropping it orphans whole subtrees.
         if kind == ATTR_ATTRIBUTE_LIST {
             stats.attribute_list += 1;
         }
 
+        if kind == ATTR_FILE_NAME {
+            let non_resident = buffer[offset + 8] != 0;
+            if !non_resident {
+                let value_length =
+                    u32::from_le_bytes(buffer[offset + 0x10..offset + 0x14].try_into().ok()?)
+                        as usize;
+                let value_offset =
+                    u16::from_le_bytes([buffer[offset + 0x14], buffer[offset + 0x15]]) as usize;
+                let value = offset + value_offset;
+
+                if value + 0x42 <= buffer.len() && value + value_length <= buffer.len() {
+                    if let Some(name) = parse_file_name(&buffer[value..value + value_length]) {
+                        parsed.names.push(name);
+                    }
+                }
+            }
+        }
+
         if kind == ATTR_DATA {
-            // Only the unnamed stream is the file's own size; the rest are
-            // named streams (thumbnails, zone identifiers, ...
+            // Only the unnamed stream is the file's own size.
             let stream_name = buffer[offset + 9];
             if stream_name == 0 {
                 let non_resident = buffer[offset + 8] != 0;
                 if non_resident {
                     if offset + 0x38 <= buffer.len() {
-                        data_size = Some(u64::from_le_bytes(
+                        parsed.data_size = Some(u64::from_le_bytes(
                             buffer[offset + 0x30..offset + 0x38]
                                 .try_into()
                                 .unwrap_or([0; 8]),
                         ));
                     }
                 } else {
-                    data_size = Some(
+                    parsed.data_size = Some(
                         u32::from_le_bytes(
                             buffer[offset + 0x10..offset + 0x14]
                                 .try_into()
@@ -203,60 +246,18 @@ pub fn parse_record(record: &[u8], bytes_per_sector: u64, stats: &mut ReadStats)
             }
         }
 
-        if kind == ATTR_FILE_NAME {
-            let non_resident = buffer[offset + 8] != 0;
-            if !non_resident {
-                let value_length = u32::from_le_bytes(
-                    buffer[offset + 0x10..offset + 0x14].try_into().ok()?,
-                ) as usize;
-                let value_offset =
-                    u16::from_le_bytes([buffer[offset + 0x14], buffer[offset + 0x15]]) as usize;
-                let value = offset + value_offset;
-
-                if value + 0x42 <= buffer.len() && value + value_length <= buffer.len() {
-                    let parsed = parse_file_name(&buffer[value..value + value_length]);
-                    if let Some(candidate) = parsed {
-                        // Prefer a Win32 name over a DOS 8.3 alias.
-                        if found.as_ref().map(|current| current.name.starts_with('~')).unwrap_or(true)
-                        {
-                            found = Some(candidate);
-                        }
-                    }
-                }
-            }
-        }
-
         offset += length;
     }
 
-    // $FILE_NAME's size field is not authoritative: for hard-linked and many
-    // other files NTFS leaves it at zero. The unnamed $DATA stream is.
-    let mut found = found;
-    if let (Some(record), Some(size)) = (found.as_mut(), data_size) {
-        if !record.is_dir {
-            record.size = size;
-        }
+    if parsed.names.is_empty() {
+        stats.no_name += 1;
     }
 
-    match &found {
-        Some(record) => {
-            stats.parsed += 1;
-            stats.bytes_in_records += record.size;
-            if record.is_dir {
-                stats.dirs += 1;
-            } else {
-                stats.files += 1;
-            }
-        }
-        None => stats.no_name += 1,
-    }
-
-    // The record number is not stored inside the record; the caller assigns it.
-    found
+    Some(parsed)
 }
 
 /// `$FILE_NAME` value: parent reference, sizes, flags, then the name.
-fn parse_file_name(value: &[u8]) -> Option<FileRecord> {
+fn parse_file_name(value: &[u8]) -> Option<NameAttr> {
     if value.len() < 0x42 {
         return None;
     }
@@ -279,15 +280,13 @@ fn parse_file_name(value: &[u8]) -> Option<FileRecord> {
         .chunks_exact(2)
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
-    let name = String::from_utf16_lossy(&units);
 
-    Some(FileRecord {
-        record: 0,
+    Some(NameAttr {
         parent,
-        name,
+        name: String::from_utf16_lossy(&units),
         is_dir: flags & 0x1000_0000 != 0,
-        size: real_size,
         reparse: flags & 0x400 != 0,
+        size: real_size,
     })
 }
 
@@ -305,6 +304,7 @@ pub fn build_report(root: &str, records: &[FileRecord], duration_ms: u128, skipp
         if (record.record < FIRST_USER_RECORD && record.record != ROOT_RECORD)
             || record.reparse
             || record.name.starts_with('$')
+            || SKIP_NAMES.contains(&record.name.to_ascii_lowercase().as_str())
         {
             continue;
         }
@@ -506,9 +506,10 @@ pub fn mft_extents(record_zero: &[u8], bytes_per_sector: u64) -> Vec<Extent> {
 pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u128, ReadStats), String> {
     let mut stats = ReadStats::default();
     let started = Instant::now();
-    // "C:\\" -> "\\.\\C:" ; the colon is part of the device name.
+
+    // "C:\" -> "\\.\C:" ; the colon is part of the device name.
     let mount = volume.trim_end_matches('\\');
-    let path = format!("\\\\.\\{mount}");
+    let path = format!("\\\\\\\\.\\\\{mount}");
 
     let mut file = File::open(&path)
         .map_err(|error| format!("cannot open {path} — {error} (needs Administrator)"))?;
@@ -530,12 +531,14 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
         return Err("$MFT has no readable data runs".to_string());
     }
 
-    let mut records = Vec::new();
+    let mut records: Vec<FileRecord> = Vec::new();
+    let mut extensions: HashMap<u64, Vec<NameAttr>> = HashMap::new();
+    let mut nameless: HashMap<u64, Option<u64>> = HashMap::new();
+    let mut produced: std::collections::HashSet<u64> = std::collections::HashSet::new();
+
     let mut skipped = 0u64;
     let mut record_number = 0u64;
     let record_size = info.record_size as usize;
-
-    // Read in chunks, carrying any partial record to the next chunk.
     let mut carry: Vec<u8> = Vec::new();
 
     for extent in extents {
@@ -561,15 +564,41 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
                 break;
             }
             remaining -= read as u64;
-
             carry.extend_from_slice(&buffer[..read]);
 
             let mut at = 0;
             while carry.len() - at >= record_size {
                 let chunk = &carry[at..at + record_size];
-                if let Some(mut record) = parse_record(chunk, info.bytes_per_sector, &mut stats) {
-                    record.record = record_number;
-                    records.push(record);
+                if let Some(parsed) = parse_record(chunk, info.bytes_per_sector, &mut stats) {
+                    if parsed.base != 0 {
+                        // Extension record: its names belong to the base record.
+                        if !parsed.names.is_empty() {
+                            extensions
+                                .entry(parsed.base)
+                                .or_default()
+                                .extend(parsed.names);
+                        }
+                    } else if parsed.names.is_empty() {
+                        nameless.insert(record_number, parsed.data_size);
+                    } else {
+                        let size_override = parsed.data_size;
+                        for name in parsed.names {
+                            let size = if name.is_dir {
+                                0
+                            } else {
+                                size_override.unwrap_or(name.size)
+                            };
+                            records.push(FileRecord {
+                                record: record_number,
+                                parent: name.parent,
+                                name: name.name,
+                                is_dir: name.is_dir,
+                                size,
+                                reparse: name.reparse,
+                            });
+                        }
+                        produced.insert(record_number);
+                    }
                 }
                 at += record_size;
                 record_number += 1;
@@ -577,6 +606,40 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
             carry.drain(..at);
         }
     }
+
+    // Records whose name lives in an extension: adopt it now that all of them
+    // have been seen.
+    for (base, names) in extensions {
+        if produced.contains(&base) {
+            continue;
+        }
+        let size_override = nameless.get(&base).copied().flatten();
+        for name in names {
+            let size = if name.is_dir {
+                0
+            } else {
+                size_override.unwrap_or(name.size)
+            };
+            records.push(FileRecord {
+                record: base,
+                parent: name.parent,
+                name: name.name,
+                is_dir: name.is_dir,
+                size,
+                reparse: name.reparse,
+            });
+        }
+        produced.insert(base);
+    }
+
+    stats.parsed = records.len() as u64;
+    stats.dirs = records.iter().filter(|record| record.is_dir).count() as u64;
+    stats.files = records.iter().filter(|record| !record.is_dir).count() as u64;
+    stats.bytes_in_records = records
+        .iter()
+        .filter(|record| !record.is_dir)
+        .map(|record| record.size)
+        .sum();
 
     Ok((
         records,
@@ -751,19 +814,20 @@ mod tests {
         let mut stats = ReadStats::default();
         let parsed = parse_record(&record, 512, &mut stats).expect("parse");
 
-        assert_eq!(parsed.name, "node_modules");
-        assert!(!parsed.is_dir);
-        assert_eq!(parsed.size, 24 * 1024 * 1024 * 1024);
+        assert_eq!(parsed.names.len(), 1);
+        assert_eq!(parsed.names[0].name, "node_modules");
+        assert!(!parsed.names[0].is_dir);
+        assert_eq!(parsed.data_size, Some(24 * 1024 * 1024 * 1024));
+        assert_eq!(parsed.names[0].size, 0, "the name copy says zero");
     }
 
     #[test]
-    fn a_directory_keeps_zero_size_even_with_a_data_attribute() {
+    fn a_directory_is_flagged_from_its_name_attribute() {
         let record = build_record(0, 4096, true);
         let mut stats = ReadStats::default();
         let parsed = parse_record(&record, 512, &mut stats).expect("parse");
 
-        assert!(parsed.is_dir);
-        assert_eq!(parsed.size, 0, "a directory's size comes from its children");
+        assert!(parsed.names[0].is_dir);
     }
 
     fn dir(record: u64, parent: u64, name: &str) -> FileRecord {

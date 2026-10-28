@@ -15,7 +15,7 @@ use crate::rules::normalize;
 use crate::types::DirEntry;
 
 /// Directories that are loops or already surfaced elsewhere by Windows.
-const SKIP_NAMES: [&str; 3] = ["$recycle.bin", "system volume information", "config.msi"];
+pub const SKIP_NAMES: [&str; 3] = ["$recycle.bin", "system volume information", "config.msi"];
 
 /// Legacy junctions inside a user profile (`Application Data` → `AppData\Roaming`).
 /// Node and Rust both report these as symlinks, which the walk already skips;
