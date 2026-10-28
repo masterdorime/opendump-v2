@@ -6,10 +6,19 @@ anything; it records the invariants and the traps that already cost time once.
 **Companion repo (read its `AGENTS.md` for the full story):**
 `C:\Users\TRISTAN\drive size audit` → https://github.com/masterdorime/opendump — the Electron
 app that is still the shipped product (v0.5.0, 5 releases). This repo has **no release** and
-should not be handed to a user as their daily driver yet: no tour, no AI, no scan cache.
+should not be handed to a user as their daily driver yet: no tour, and no release.
 
-**Last updated:** 2026-10-27 · last code commit `806f258` (docs commits follow) · working tree
+**Last updated:** 2026-10-29 · last code commit `1bfd9ca` (docs commits follow) · working tree
 clean · CI green.
+
+> **Two standing rules, added 2026-10-29.**
+>
+> 1. **Map before you read.** `graphify-out/` (in the v1 repo root) holds a knowledge graph of
+>    that repo; ask it where things are instead of opening files to find out. Rebuild with
+>    `/graphify .` after structural change. For this repo, run `/graphify .` here once and the
+>    same applies.
+> 2. **Document every change in the same commit.** Counts, the file map, the roadmap, and any
+>    decision a change contradicts. Unfinished work goes in the commit message, not left silent.
 
 ---
 
@@ -18,13 +27,15 @@ clean · CI green.
 | | |
 | --- | --- |
 | Version | 0.1.0, unreleased |
-| Tests | **43** (`cargo test --workspace`) |
-| Lines | **4,317** Rust |
-| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.43 MB |
-| Measured | full `C:\` scan **72–134 s** (load-dependent), **89 MB** idle, **130 MB** with a full map drawn |
+| Tests | **73** (`cargo test --workspace`) |
+| Lines | **7,865** Rust |
+| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.93 MB |
+| Measured | full `C:\` scan **4.9 s** via the MFT, **75 s** via the walk; **~95 MB** idle, **~130 MB** with a full map drawn |
 
-The window now has v1's shell: red dark theme, three peer views with count pills, a nested
-treemap, an inspector sidebar, and a free-space meter.
+The window has five views (Map / Review / Quarantine / AI / Rules), a nested treemap with
+Status and Size colouring, an inspector with content inspection, light and dark themes on a
+monochrome chrome with a red accent, a purge confirmation card, and press feedback on every
+filled button. The scan reads the NTFS MFT when elevated and falls back to the walk.
 
 Correctness anchor: totals match `robocopy /L` exactly on `Users` (223.1 GB / 999,946 files),
 `Windows`, `ProgramData`, `Program Files`.
@@ -154,19 +165,21 @@ rebuild before the window sees it. The CLI reads it from disk (cwd, beside the e
 
 ## 7. What is next
 
+**Release v0.1.0.** Nothing else changes who can use this: today a stranger needs Rust. Both
+binaries already build; a zip plus release notes is an hour, and unsigned means SmartScreen says
+"Unknown publisher" exactly as v1 does.
+
 **Guided tour.** v1's `TourOverlay.tsx` is the reference: steps with a target rect, heading and
 copy, everything else dimmed. In egui the dim is a `layer_painter` fill plus a hole — and note
 trap 3 above, an `Area`'s painter is clipped to its own content.
 
-Then: AI panel (v1 `src/shared/ai/*`), scan cache (v1 opens in milliseconds, v2 rescans for
-~90 s every launch), MFT scanner.
+Then: cloud AI provider (wired in v1, never tested live — test before porting), Exclude from Scan
+(needs the scanner to take a list and the cache to invalidate on it), multi-drive, elevated tier.
 
-Already shipped: treemap (`171017e`), memory meters (`502734b`), and the v1-parity shell in
-`806f258` — red theme, nested treemap, inspector, three views, free-space meter.
-
-Beyond the UI, the highest-value work in either repo is the **inspection layer** — reading
-folder contents instead of guessing from names. That is v1 work today.
-
+Already shipped and not to be rebuilt: treemap (`171017e`), meters (`502734b`), cache
+(`498bb04`), local AI (`80a484a`), inspection layer and rules editor (`d026648`), themes
+(`a7f0572`), MFT scanner (`9bb29e4` → `731e7b2`), purge dialog and press feedback
+(`f945c5c`, `1bfd9ca`).
 ---
 
 ## 8. Verifying
