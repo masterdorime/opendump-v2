@@ -1,6 +1,6 @@
 use opendump_core::{
-    compile, default_tokens, depth_of, find_candidates, match_rule, parent_of, DirEntry, Rule,
-    RuleMatch, Tier,
+    apply_overrides, compile, default_tokens, depth_of, find_candidates, match_rule, parent_of,
+    DirEntry, Overrides, Rule, RuleMatch, Tier,
 };
 
 const MB: u64 = 1024 * 1024;
@@ -257,4 +257,39 @@ fn depth_of_is_a_separator_count_not_a_level_number() {
 
     // The ordering property that actually matters.
     assert!(depth_of("C:\\Users\\you") > depth_of("C:\\Users"));
+}
+
+#[test]
+fn overrides_disable_and_retier_rules_in_place() {
+    use std::collections::HashMap;
+
+    let rules = vec![
+        rule("keep-saves", Tier::Keep, prefix("C:\\Saves")),
+        rule("tlauncher", Tier::Review, prefix("C:\\TL")),
+    ];
+    let overrides = Overrides {
+        disabled: vec!["tlauncher".to_string()],
+        tiers: HashMap::from([("keep-saves".to_string(), Tier::Review)]),
+    };
+
+    let applied = apply_overrides(rules, &overrides);
+
+    assert_eq!(applied.len(), 1, "the disabled rule must be gone");
+    assert_eq!(applied[0].id, "keep-saves");
+    assert_eq!(applied[0].tier, Tier::Review, "the tier must be replaced");
+}
+
+#[test]
+fn overrides_naming_unknown_rules_change_nothing() {
+    use std::collections::HashMap;
+
+    let rules = vec![rule("keep-saves", Tier::Keep, prefix("C:\\Saves"))];
+    let overrides = Overrides {
+        disabled: vec!["does-not-exist".to_string()],
+        tiers: HashMap::from([("also-missing".to_string(), Tier::Locked)]),
+    };
+
+    let applied = apply_overrides(rules, &overrides);
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].tier, Tier::Keep);
 }

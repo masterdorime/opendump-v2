@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 /// How safe a folder is to remove. Ordered by urgency, not alphabetically.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Tier {
     SafePurge,

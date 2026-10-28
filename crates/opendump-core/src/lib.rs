@@ -17,6 +17,7 @@ pub mod cache;
 pub mod executor;
 pub mod format;
 pub mod hardware;
+pub mod inspect;
 pub mod layout;
 pub mod rules;
 pub mod scan;
@@ -31,10 +32,11 @@ pub use ai::{classify, models, parse_verdicts, reachable, AiTier, ClassifyItem, 
 pub use cache::{CachedNode, CachedScan};
 pub use format::{bytes, thousands};
 pub use hardware::{Gpu, Memory};
+pub use inspect::{inspect_folder, FolderDetail};
 pub use layout::{squarify, Box4};
 pub use rules::{
-    compile, depth_of, find_candidates, find_unclassified, match_rule, parent_of, Candidate,
-    CompiledRule, UnclassifiedDir,
+    apply_overrides, compile, depth_of, find_candidates, find_unclassified, match_rule, parent_of,
+    Candidate, CompiledRule, Overrides, UnclassifiedDir,
 };
 pub use scan::{scan, scan_with_progress, ScanProgress, ScanReport};
 pub use tokens::{default_tokens, expand, TokenMap};

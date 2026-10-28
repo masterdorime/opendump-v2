@@ -15,9 +15,11 @@ use eframe::egui::{self, Color32, RichText};
 use serde::Deserialize;
 
 use opendump_core::{
-    ai, bytes, cache, compile, default_tokens, find_candidates, hardware, inspect_staged,
+    ai, apply_overrides, bytes, cache, compile, default_tokens, find_candidates, hardware, inspect_folder,
+    inspect_staged,
     list_quarantine, match_rule, parent_of, purge, quarantine, restore, scan, scan_with_progress,
     squarify, thousands, AiTier, Box4, CachedNode, CachedScan, Candidate, ClassifyItem, CompiledRule,
+    FolderDetail, Overrides,
     ExecItem, ExecOptions, Memory, Rule, ScanProgress, StagedDetail, Tier, Verdict,
 };
 
@@ -137,6 +139,7 @@ enum Pane {
     Review,
     Quarantine,
     Ai,
+    Rules,
 }
 
 /// One rectangle in the nested treemap. Parents are pushed before their
@@ -192,12 +195,36 @@ enum Message {
     AiProgress(usize, usize),
     AiDone(Vec<Verdict>),
     AiError(String),
+    Inspected(String, Box<FolderDetail>),
 }
 
 fn base_dir() -> PathBuf {
     std::env::var("APPDATA")
         .map(|appdata| PathBuf::from(appdata).join("opendump-native"))
         .unwrap_or_else(|_| PathBuf::from(".opendump-native"))
+}
+
+fn overrides_path() -> PathBuf {
+    base_dir().join("overrides.json")
+}
+
+fn load_overrides() -> Overrides {
+    std::fs::read_to_string(overrides_path())
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_overrides(disabled: &std::collections::HashSet<String>) {
+    let mut current = load_overrides();
+    current.disabled = disabled.iter().cloned().collect();
+    current.disabled.sort();
+    if let Some(parent) = overrides_path().parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&current) {
+        let _ = std::fs::write(overrides_path(), text);
+    }
 }
 
 /// UI preferences; small enough to rewrite whole on every change.
@@ -280,7 +307,8 @@ fn exec_options() -> ExecOptions {
 
 fn rules() -> Vec<CompiledRule> {
     let document: RulesDocument = serde_json::from_str(RULES_JSON).expect("bundled rules parse");
-    compile(&document.rules, &default_tokens())
+    let applied = apply_overrides(document.rules, &load_overrides());
+    compile(&applied, &default_tokens())
 }
 
 fn default_drive() -> String {
@@ -377,6 +405,10 @@ struct App {
     ai_progress: (usize, usize),
     ai_results: Vec<Verdict>,
     ai_error: Option<String>,
+    inspection: Option<(String, FolderDetail)>,
+    inspecting: bool,
+    disabled_rules: std::collections::HashSet<String>,
+    rules_dirty: bool,
     map_colour: MapColour,
     search: String,
     logo: Option<egui::TextureHandle>,
@@ -412,6 +444,10 @@ impl App {
             ai_progress: (0, 0),
             ai_results: Vec::new(),
             ai_error: None,
+            inspection: None,
+            inspecting: false,
+            disabled_rules: load_overrides().disabled.into_iter().collect(),
+            rules_dirty: false,
             map_colour: MapColour::Status,
             search: String::new(),
             logo: None,
@@ -656,6 +692,10 @@ impl App {
                 Message::AiError(text) => {
                     self.ai_running = false;
                     self.ai_error = Some(text);
+                }
+                Message::Inspected(path, detail) => {
+                    self.inspecting = false;
+                    self.inspection = Some((path, *detail));
                 }
             }
         }
@@ -1425,6 +1465,7 @@ impl eframe::App for App {
                     Pane::Review => self.review(ui, ctx),
                     Pane::Quarantine => self.quarantine_panel(ui, ctx),
                     Pane::Ai => self.ai_pane(ui, ctx),
+                    Pane::Rules => self.rules_pane(ui, ctx),
                 }
             });
 
@@ -1933,6 +1974,7 @@ impl App {
             (Pane::Review, "REVIEW", actionable),
             (Pane::Quarantine, "QUARANTINE", held),
             (Pane::Ai, "AI", self.ai_results.len()),
+            (Pane::Rules, "RULES", self.disabled_rules.len()),
         ];
 
         ui.horizontal(|ui| {
@@ -2410,6 +2452,110 @@ impl App {
         });
     }
 
+    /// The shipped rules, with the user's edits on top.
+    ///
+    /// Editing here writes overrides.json; the compiled set is rebuilt on the
+    /// next scan, so the banner tells the user to rescan rather than pretending
+    /// the change is live.
+    fn rules_pane(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let compiled = rules();
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("RULES").size(10.5).color(pal().muted));
+            ui.label(
+                RichText::new(format!("{} active · {} off", compiled.len(), self.disabled_rules.len()))
+                    .size(10.5)
+                    .color(pal().dim),
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if self.rules_dirty { "Save changes" } else { "Saved" };
+                let button = egui::Button::new(RichText::new(label).color(pal().on_accent))
+                    .fill(if self.rules_dirty { pal().accent } else { mix(pal().bg, pal().accent, 0.25) });
+                if ui.add_enabled(self.rules_dirty, button).clicked() {
+                    save_overrides(&self.disabled_rules);
+                    // Every cached verdict was produced by the old rule set.
+                    let _ = std::fs::remove_file(cache_path());
+                    self.rules_dirty = false;
+                    self.toast = Some((
+                        "Rules saved. Press Rescan to apply them.".to_string(),
+                        Instant::now(),
+                    ));
+                    let _ = ctx;
+                }
+                if ui.button("Reset all").clicked() {
+                    self.disabled_rules.clear();
+                    self.rules_dirty = true;
+                }
+            });
+        });
+
+        ui.add_space(6.0);
+        if self.rules_dirty {
+            ui.label(
+                RichText::new("Unsaved. Changes apply on the next scan.")
+                    .size(10.0)
+                    .color(pal().review),
+            );
+            ui.add_space(4.0);
+        }
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .max_height((ui.available_height() - 16.0).max(200.0))
+            .show(ui, |ui| {
+                for rule in &compiled {
+                    let mut enabled = !self.disabled_rules.contains(&rule.id);
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut enabled, "").changed() {
+                            if enabled {
+                                self.disabled_rules.remove(&rule.id);
+                            } else {
+                                self.disabled_rules.insert(rule.id.clone());
+                            }
+                            self.rules_dirty = true;
+                        }
+                        ui.label(
+                            RichText::new(&rule.id)
+                                .monospace()
+                                .size(10.5)
+                                .color(if enabled { pal().text } else { pal().dim }),
+                        );
+                        tier_pill(ui, rule.tier);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(clamp_label(&rule.reason, 70))
+                                    .size(9.5)
+                                    .color(pal().dim),
+                            );
+                        });
+                    });
+                }
+            });
+    }
+
+    /// Read a bounded sample of the folder, off the UI thread.
+    fn start_inspection(&mut self, path: &str, ctx: &egui::Context) {
+        self.inspecting = true;
+        self.inspection = None;
+
+        let sender = self.sender.clone();
+        let ctx = ctx.clone();
+        let target = path.to_string();
+
+        std::thread::spawn(move || {
+            match inspect_folder(std::path::Path::new(&target), 4_000) {
+                Ok(detail) => {
+                    let _ = sender.send(Message::Inspected(target, Box::new(detail)));
+                }
+                Err(error) => {
+                    let _ = sender.send(Message::Action(format!("inspect failed: {error}")));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     fn run_ai(&mut self, ctx: &egui::Context) {
         if self.ai_running {
             return;
@@ -2473,6 +2619,7 @@ impl App {
 
         let mut go: Option<String> = None;
         let mut stage: Option<String> = None;
+        let mut inspect_target: Option<String> = None;
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -2561,6 +2708,32 @@ impl App {
                         stage = Some(current.clone());
                     }
                 });
+
+                ui.add_space(12.0);
+                ui.label(RichText::new("SAMPLE").size(9.5).color(pal().dim));
+                ui.add_space(4.0);
+
+                let busy = self.inspecting;
+                if ui
+                    .add_enabled(
+                        !busy,
+                        egui::Button::new(if busy { "Reading…" } else { "Inspect contents" }),
+                    )
+                    .clicked()
+                {
+                    inspect_target = Some(current.clone());
+                }
+
+                match &self.inspection {
+                    Some((path, detail)) if path == &current => draw_inspection(ui, detail),
+                    _ => {
+                        ui.label(
+                            RichText::new("Names are a guess. Contents are evidence.")
+                                .size(10.0)
+                                .color(pal().dim),
+                        );
+                    }
+                }
             });
 
         if let Some(path) = go {
@@ -2568,6 +2741,9 @@ impl App {
         }
         if let Some(path) = stage {
             self.quarantine_path(&path, ctx);
+        }
+        if let Some(path) = inspect_target {
+            self.start_inspection(&path, ctx);
         }
     }
 
@@ -2708,6 +2884,62 @@ fn stat(ui: &mut egui::Ui, label: &str, value: &str) {
         ui.label(RichText::new(value).monospace().size(11.5));
     });
     ui.add_space(14.0);
+}
+
+/// What the sample found, in the inspector.
+fn draw_inspection(ui: &mut egui::Ui, detail: &FolderDetail) {
+    ui.label(
+        RichText::new(format!(
+            "{} files · {}{}",
+            thousands(detail.files_seen),
+            bytes(detail.bytes_seen),
+            if detail.truncated { " (sampled)" } else { "" }
+        ))
+        .size(10.0)
+        .color(pal().muted),
+    );
+
+    if let Some(concern) = &detail.concern {
+        ui.add_space(2.0);
+        ui.label(RichText::new(concern).size(10.0).color(pal().review));
+    }
+
+    ui.add_space(6.0);
+    for (extension, count, size) in detail.extensions.iter().take(6) {
+        ui.horizontal(|ui| {
+            let name = if extension.is_empty() { "(none)" } else { extension.as_str() };
+            ui.label(RichText::new(name).monospace().size(10.0).color(pal().muted));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!("{count} · {}", bytes(*size)))
+                        .monospace()
+                        .size(10.0)
+                        .color(pal().dim),
+                );
+            });
+        });
+    }
+
+    ui.add_space(6.0);
+    ui.label(RichText::new("LARGEST").size(9.5).color(pal().dim));
+    for (name, size) in &detail.top_files {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(clamp_label(name, 30))
+                    .monospace()
+                    .size(10.0)
+                    .color(pal().muted),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(bytes(*size))
+                        .monospace()
+                        .size(10.0)
+                        .color(pal().dim),
+                );
+            });
+        });
+    }
 }
 
 /// One summary cell. Equal width comes from `columns`, not from guessing a

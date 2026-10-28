@@ -127,6 +127,36 @@ pub fn find_unclassified(
     out
 }
 
+/// A user's edits to the shipped rules, stored outside the app so a rebuild
+/// does not lose them.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Overrides {
+    /// Rule ids the user switched off.
+    #[serde(default)]
+    pub disabled: Vec<String>,
+    /// Rule id -> replacement tier.
+    #[serde(default)]
+    pub tiers: std::collections::HashMap<String, crate::types::Tier>,
+}
+
+impl Overrides {
+    pub fn is_empty(&self) -> bool {
+        self.disabled.is_empty() && self.tiers.is_empty()
+    }
+}
+
+/// Apply the user's edits to the shipped rules, preserving their order: order
+/// is what decides precedence, so this filters and rewrites in place.
+pub fn apply_overrides(mut rules: Vec<Rule>, overrides: &Overrides) -> Vec<Rule> {
+    for rule in &mut rules {
+        if let Some(tier) = overrides.tiers.get(&rule.id) {
+            rule.tier = *tier;
+        }
+    }
+    rules.retain(|rule| !overrides.disabled.iter().any(|id| id == &rule.id));
+    rules
+}
+
 pub fn compile(rules: &[Rule], tokens: &TokenMap) -> Vec<CompiledRule> {
     rules
         .iter()
