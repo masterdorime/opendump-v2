@@ -1239,7 +1239,7 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn summary(&self, ui: &mut egui::Ui) {
+    fn summary(&mut self, ui: &mut egui::Ui) {
         let Some(view) = &self.scan else {
             ui.label(RichText::new("Scan the drive to see what can be removed.").color(MUTED));
             return;
@@ -1247,15 +1247,16 @@ impl App {
 
         let mut counts = [(0usize, 0u64); 4];
         for candidate in &view.candidates {
-            let index = match candidate.tier {
-                Tier::SafePurge => 0,
-                Tier::Review => 1,
-                Tier::Keep => 2,
-                Tier::Locked => 3,
-            };
-            counts[index].0 += 1;
-            counts[index].1 += candidate.size;
+            let slot = &mut counts[tier_index(candidate.tier)];
+            slot.0 += 1;
+            slot.1 += candidate.size;
         }
+
+        let folders = view.folders;
+        let files = view.files;
+        let total = view.bytes;
+
+        let mut jump: Option<Tier> = None;
 
         egui::Frame::none()
             .fill(PANEL)
@@ -1264,23 +1265,30 @@ impl App {
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    stat(ui, "folders", &thousands(view.folders));
-                    stat(ui, "files", &thousands(view.files));
-                    stat(ui, "size", &bytes(view.bytes));
-                    for (index, tier) in [Tier::SafePurge, Tier::Review, Tier::Keep, Tier::Locked]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        let (count, total) = counts[index];
+                    stat(ui, "folders", &thousands(folders));
+                    stat(ui, "files", &thousands(files));
+                    stat(ui, "size", &bytes(total));
+
+                    // The tier cells are the shortcut into a filtered Review:
+                    // click KEEP here and you are looking at what is kept.
+                    for tier in [Tier::SafePurge, Tier::Review, Tier::Keep, Tier::Locked] {
+                        let (count, size) = counts[tier_index(tier)];
                         let text = if count == 0 {
                             "—".to_string()
                         } else {
-                            format!("{} · {}", count, bytes(total))
+                            format!("{} · {}", count, bytes(size))
                         };
-                        stat_colored(ui, tier_label(tier), &text, tier_color(tier));
+                        if stat_button(ui, tier_label(tier), &text, tier_color(tier)) {
+                            jump = Some(tier);
+                        }
                     }
                 });
             });
+
+        if let Some(tier) = jump {
+            self.filter = Some(tier);
+            self.pane = Pane::Review;
+        }
     }
 
     fn review(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1345,7 +1353,7 @@ impl App {
 
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new(format!("{} rows", visible.len()))
+                RichText::new(format!("{} of {} folders · {} of {}", visible.len(), thousands(view.folders), bytes(visible.iter().map(|c| c.size).sum::<u64>()), bytes(view.bytes)))
                     .size(10.0)
                     .color(DIM),
             );
@@ -2375,6 +2383,33 @@ impl App {
     }
 }
 
+/// A summary cell that is also a shortcut: clicking it opens Review filtered to
+/// that tier.
+fn stat_button(ui: &mut egui::Ui, label: &str, value: &str, colour: Color32) -> bool {
+    let id = ui.make_persistent_id(("tier-stat", label));
+
+    let inner = ui.allocate_ui_with_layout(
+        egui::vec2(112.0, 32.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.label(RichText::new(label).size(9.0).color(DIM));
+            ui.label(RichText::new(value).size(11.5).color(colour).monospace());
+        },
+    );
+
+    let rect = inner.response.rect;
+    let response = ui.interact(rect, id, egui::Sense::click());
+    if response.hovered() {
+        ui.painter().rect_stroke(
+            rect.expand(2.0),
+            egui::Rounding::same(5.0),
+            egui::Stroke::new(1.0_f32, LINE),
+        );
+    }
+
+    response.clicked()
+}
+
 fn stat(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.vertical(|ui| {
         ui.label(RichText::new(label.to_uppercase()).size(9.0).color(DIM));
@@ -2383,13 +2418,7 @@ fn stat(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.add_space(16.0);
 }
 
-fn stat_colored(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
-    ui.vertical(|ui| {
-        ui.label(RichText::new(label).size(9.0).color(color));
-        ui.label(RichText::new(value).monospace().size(13.0));
-    });
-    ui.add_space(16.0);
-}
+
 
 
 // ------------------------------------------------------------------- selftest
