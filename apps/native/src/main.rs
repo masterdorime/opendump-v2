@@ -2781,12 +2781,17 @@ impl App {
         let mut cancel = false;
         let mut confirmed = false;
 
+        // Escape is the safe exit, and people try it.
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        }
+
         let screen = ctx.screen_rect();
         ctx.layer_painter(egui::LayerId::new(
             egui::Order::Middle,
             egui::Id::new("purge-dim"),
         ))
-        .rect_filled(screen, 0.0, Color32::from_black_alpha(190));
+        .rect_filled(screen, 0.0, Color32::from_black_alpha(200));
 
         // Swallow clicks so the panels behind the dialog cannot be operated.
         egui::Area::new(egui::Id::new("purge-block"))
@@ -2797,93 +2802,162 @@ impl App {
                 ui.allocate_response(screen.size(), egui::Sense::click());
             });
 
-        egui::Window::new("Permanently delete")
+        egui::Window::new("purge-confirm")
+            .title_bar(false)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .order(egui::Order::Foreground)
             .frame(
-                egui::Frame::window(&ctx.style())
+                egui::Frame::none()
                     .fill(pal().panel)
                     .stroke(egui::Stroke::new(
                         1.0_f32,
-                        mix(pal().bg, pal().locked, 0.55),
-                    )),
+                        mix(pal().bg, pal().locked, 0.45),
+                    ))
+                    .rounding(egui::Rounding::same(10.0))
+                    .inner_margin(egui::Margin::same(20.0)),
             )
             .show(ctx, |ui| {
-                ui.set_width(560.0);
+                ui.set_width(600.0);
+
                 ui.label(
                     RichText::new(format!(
-                        "Delete {} folder{} · {} permanently",
+                        "Permanently delete {} folder{}",
                         state.ids.len(),
-                        if state.ids.len() == 1 { "" } else { "s" },
-                        bytes(state.bytes)
+                        if state.ids.len() == 1 { "" } else { "s" }
                     ))
+                    .size(13.5)
                     .strong()
-                    .size(14.0),
+                    .color(pal().text),
                 );
                 ui.label(
+                    RichText::new(format!(
+                        "{} across {} files.",
+                        bytes(state.bytes),
+                        thousands(state.files)
+                    ))
+                    .size(11.5)
+                    .color(pal().muted),
+                );
+                ui.add_space(4.0);
+                ui.label(
                     RichText::new(
-                        "There is no undo after this. Quarantine could be restored; this cannot.",
+                        "Quarantine could be restored. This cannot. There is no undo.",
                     )
                     .size(11.5)
                     .color(pal().locked),
                 );
-                ui.add_space(8.0);
 
-                egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                    for detail in &state.details {
-                        ui.label(RichText::new(pretty(&detail.src)).monospace().size(11.5));
-                        ui.label(
-                            RichText::new(if detail.truncated {
-                                format!("{}+ files", thousands(detail.file_count))
-                            } else {
-                                format!("{} files", thousands(detail.file_count))
-                            })
-                            .size(10.5)
-                            .color(pal().dim),
-                        );
-                        for (name, size) in &detail.top_files {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(name).monospace().size(10.5).color(pal().muted));
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                ui.scope(|ui| {
+                    // Inside the dialog the bar must reserve its lane, or it sits
+                    // on top of the file names.
+                    ui.spacing_mut().scroll.floating = false;
+                    ui.spacing_mut().scroll.bar_width = 8.0;
+
+                    egui::ScrollArea::vertical()
+                        .max_height(250.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for (index, detail) in state.details.iter().enumerate() {
+                                if index > 0 {
+                                    ui.add_space(8.0);
+                                    ui.separator();
+                                    ui.add_space(8.0);
+                                }
+
+                                ui.label(
+                                    RichText::new(pretty(&detail.src))
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(pal().text),
+                                );
+                                ui.label(
+                                    RichText::new(if detail.truncated {
+                                        format!("{}+ files", thousands(detail.file_count))
+                                    } else {
+                                        format!("{} files", thousands(detail.file_count))
+                                    })
+                                    .size(9.5)
+                                    .color(pal().dim),
+                                );
+                                ui.add_space(3.0);
+
+                                for (name, size) in &detail.top_files {
+                                    let reserved = 82.0;
+                                    let max_chars = (((ui.available_width() - reserved)
+                                        / 6.3)
+                                        .max(8.0)) as usize;
+                                    ui.horizontal(|ui| {
                                         ui.label(
-                                            RichText::new(bytes(*size))
+                                            RichText::new(clamp_label(name, max_chars))
                                                 .monospace()
                                                 .size(10.5)
-                                                .color(pal().dim),
+                                                .color(pal().muted),
                                         );
-                                    },
-                                );
-                            });
-                        }
-                        ui.add_space(8.0);
-                    }
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    RichText::new(bytes(*size))
+                                                        .monospace()
+                                                        .size(10.5)
+                                                        .color(pal().dim),
+                                                );
+                                            },
+                                        );
+                                    });
+                                }
+                            }
+                        });
                 });
 
-                ui.add_space(6.0);
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(10.0);
+
                 ui.checkbox(
                     &mut state.acknowledged,
-                    format!(
-                        "I understand these {} files will be destroyed",
+                    RichText::new(format!(
+                        "I understand {} files will be destroyed",
                         thousands(state.files)
-                    ),
+                    ))
+                    .size(11.5),
                 );
 
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                    let button = egui::Button::new(
-                        RichText::new(format!("Permanently delete {}", bytes(state.bytes)))
-                            .color(Color32::WHITE),
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Styled by hand rather than add_enabled: egui's dimming turns
+                    // the danger red into a washed pink that reads as decorative.
+                    let armed = state.acknowledged;
+                    let (fill, ink) = if armed {
+                        (pal().locked, pal().on_accent)
+                    } else {
+                        (mix(pal().bg, pal().locked, 0.16), pal().dim)
+                    };
+                    let delete = egui::Button::new(
+                        RichText::new(format!("Delete {}", bytes(state.bytes)))
+                            .size(11.5)
+                            .strong()
+                            .color(ink),
                     )
-                    .fill(mix(pal().bg, pal().locked, 0.85));
-                    if ui.add_enabled(state.acknowledged, button).clicked() {
+                    .fill(fill)
+                    .rounding(egui::Rounding::same(8.0))
+                    .min_size(egui::vec2(160.0, 32.0));
+                    if ui.add(delete).clicked() && armed {
                         confirmed = true;
+                    }
+
+                    let keep = egui::Button::new(RichText::new("Cancel").size(11.5))
+                        .fill(mix(pal().bg, pal().text, 0.06))
+                        .rounding(egui::Rounding::same(8.0))
+                        .min_size(egui::vec2(90.0, 30.0));
+                    if ui.add(keep).clicked() {
+                        cancel = true;
                     }
                 });
             });
