@@ -56,6 +56,12 @@ struct NodeInfo {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum MapColour {
+    Status,
+    Size,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Pane {
     Map,
     Review,
@@ -278,6 +284,8 @@ struct App {
     ai_progress: (usize, usize),
     ai_results: Vec<Verdict>,
     ai_error: Option<String>,
+    map_colour: MapColour,
+    search: String,
 }
 
 impl App {
@@ -308,6 +316,8 @@ impl App {
             ai_progress: (0, 0),
             ai_results: Vec::new(),
             ai_error: None,
+            map_colour: MapColour::Status,
+            search: String::new(),
         };
 
         // Open to the last map when the cache was written by these rules.
@@ -813,6 +823,33 @@ fn relative_time(seconds: u64) -> String {
     }
 }
 
+/// Colour by absolute size, for the map's Size mode.
+fn size_fill(size: u64) -> Color32 {
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * MB;
+
+    let ramp = [
+        (0x1b, 0x1f, 0x26),
+        (0x28, 0x30, 0x3b),
+        (0x39, 0x47, 0x57),
+        (0x50, 0x63, 0x78),
+        (0x6d, 0x86, 0x9e),
+        (0x93, 0xaf, 0xc6),
+    ];
+
+    let index = match size {
+        value if value >= 10 * GB => 5,
+        value if value >= GB => 4,
+        value if value >= 100 * MB => 3,
+        value if value >= 10 * MB => 2,
+        value if value >= MB => 1,
+        _ => 0,
+    };
+
+    let (r, g, b) = ramp[index];
+    Color32::from_rgb(r, g, b)
+}
+
 fn last_component(path: &str) -> &str {
     let trimmed = path.trim_end_matches(['\\', '/']);
     // A drive root has no final component; show "C:\" rather than nothing.
@@ -1203,7 +1240,7 @@ impl eframe::App for App {
                         .fill(BG)
                         .inner_margin(egui::Margin::symmetric(14.0, 12.0)),
                 )
-                .show(ctx, |ui| self.inspector(ui));
+                .show(ctx, |ui| self.inspector(ui, ctx));
         }
 
         egui::CentralPanel::default()
@@ -1257,6 +1294,7 @@ impl App {
         let total = view.bytes;
 
         let mut jump: Option<Tier> = None;
+        let mut open_ai = false;
 
         egui::Frame::none()
             .fill(PANEL)
@@ -1271,16 +1309,38 @@ impl App {
 
                     // The tier cells are the shortcut into a filtered Review:
                     // click KEEP here and you are looking at what is kept.
+                    let classified: u64 = counts.iter().map(|slot| slot.1).sum();
+
                     for tier in [Tier::SafePurge, Tier::Review, Tier::Keep, Tier::Locked] {
                         let (count, size) = counts[tier_index(tier)];
-                        let text = if count == 0 {
+                        let share = size as f64 / total.max(1) as f64 * 100.0;
+                        let value = if count == 0 {
                             "—".to_string()
                         } else {
-                            format!("{} · {}", count, bytes(size))
+                            format!("{} · {:.0}%", bytes(size), share)
                         };
-                        if stat_button(ui, tier_label(tier), &text, tier_color(tier)) {
+                        if stat_button(
+                            ui,
+                            &format!("{} {count}", tier_label(tier)),
+                            &value,
+                            tier_color(tier),
+                        ) {
                             jump = Some(tier);
                         }
+                    }
+
+                    // The remainder: folders no rule classified, plus classified
+                    // folders below the 1 MB display threshold. Shown so the row
+                    // always sums to the drive.
+                    let unclassified = total.saturating_sub(classified);
+                    let share = unclassified as f64 / total.max(1) as f64 * 100.0;
+                    if stat_button(
+                        ui,
+                        "UNCLASSIFIED",
+                        &format!("{} · {:.0}%", bytes(unclassified), share),
+                        Color32::from_rgb(0x8a, 0x74, 0x78),
+                    ) {
+                        open_ai = true;
                     }
                 });
             });
@@ -1288,6 +1348,9 @@ impl App {
         if let Some(tier) = jump {
             self.filter = Some(tier);
             self.pane = Pane::Review;
+        }
+        if open_ai {
+            self.pane = Pane::Ai;
         }
     }
 
@@ -1337,10 +1400,14 @@ impl App {
 
         ui.add_space(8.0);
 
+        let needle = self.search.trim().to_lowercase();
         let mut visible: Vec<&Candidate> = view
             .candidates
             .iter()
             .filter(|candidate| self.filter.map_or(true, |tier| candidate.tier == tier))
+            .filter(|candidate| {
+                needle.is_empty() || candidate.path.to_lowercase().contains(&needle)
+            })
             .collect();
 
         // Actionable tiers first: a review list that opens on fifty protected
@@ -1358,6 +1425,11 @@ impl App {
                     .color(DIM),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.search)
+                        .desired_width(190.0)
+                        .hint_text("search paths"),
+                );
                 if ui.button("Select all safe").clicked() {
                     let safe: Vec<String> = view
                         .candidates
@@ -1716,6 +1788,7 @@ impl App {
 
         let mut zoom_out = false;
         let mut zoom_to: Option<String> = None;
+        let mut pick_mode: Option<MapColour> = None;
 
         ui.horizontal(|ui| {
             if self.zoom.is_some() && ui.button("‹ up").clicked() {
@@ -1727,6 +1800,13 @@ impl App {
                     .size(11.0)
                     .color(MUTED),
             );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                for (mode, label) in [(MapColour::Status, "STATUS"), (MapColour::Size, "SIZE")] {
+                    if chip(ui, label, 0, 0, self.map_colour == mode, ACCENT) {
+                        pick_mode = Some(mode);
+                    }
+                }
+            });
         });
         ui.add_space(4.0);
 
@@ -1754,7 +1834,10 @@ impl App {
                 continue;
             }
 
-            let fill = tile_fill(visual.tier, visual.depth);
+            let fill = match self.map_colour {
+                MapColour::Status => tile_fill(visual.tier, visual.depth),
+                MapColour::Size => size_fill(visual.size),
+            };
             painter.rect_filled(visual.rect, 0.0, fill);
             // A hairline in the page colour separates one level from the next.
             painter.rect_stroke(visual.rect, 0.0, egui::Stroke::new(1.0_f32, BG));
@@ -1883,18 +1966,35 @@ impl App {
         if let Some(path) = zoom_to {
             self.zoom = Some(path);
         }
+        if let Some(mode) = pick_mode {
+            self.map_colour = mode;
+        }
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            for (tier, label) in [
-                (Tier::SafePurge, "Safe"),
-                (Tier::Review, "Review"),
-                (Tier::Keep, "Keep"),
-                (Tier::Locked, "Locked"),
-            ] {
-                legend_item(ui, tier_color(tier), label);
+            match self.map_colour {
+                MapColour::Status => {
+                    for (tier, label) in [
+                        (Tier::SafePurge, "Safe"),
+                        (Tier::Review, "Review"),
+                        (Tier::Keep, "Keep"),
+                        (Tier::Locked, "Locked"),
+                    ] {
+                        legend_item(ui, tier_color(tier), label);
+                    }
+                    legend_item(ui, tile_fill(None, 7), "Unclassified");
+                }
+                MapColour::Size => {
+                    for (size, label) in [
+                        (0u64, "<1 MB"),
+                        (1 << 20, "1-100 MB"),
+                        (100 << 20, "100 MB-1 GB"),
+                        (1 << 30, "1 GB+"),
+                    ] {
+                        legend_item(ui, size_fill(size), label);
+                    }
+                }
             }
-            legend_item(ui, tile_fill(None, 7), "Unclassified");
         });
     }
 
@@ -2108,6 +2208,31 @@ impl App {
             });
     }
 
+    /// Stage one folder from the inspector. Staging only — the purge dialog
+    /// remains the only path to deletion.
+    fn quarantine_path(&mut self, path: &str, ctx: &egui::Context) {
+        let compiled = rules();
+        let item = match classify(path, &compiled) {
+            Ok((item, _)) => item,
+            Err(error) => {
+                self.toast = Some((format!("cannot stage: {error}"), Instant::now()));
+                return;
+            }
+        };
+
+        let sender = self.sender.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let message = match quarantine(&[item], &exec_options()) {
+                Ok(batch) => format!("{} staged · nothing deleted", bytes(batch.bytes)),
+                Err(error) => format!("quarantine failed: {error}"),
+            };
+            let _ = sender.send(Message::Action(message));
+            let _ = sender.send(Message::Staged(staged_snapshot()));
+            ctx.request_repaint();
+        });
+    }
+
     fn run_ai(&mut self, ctx: &egui::Context) {
         if self.ai_running {
             return;
@@ -2157,7 +2282,7 @@ impl App {
     }
 
     /// The right-hand panel: what is inside the folder you are looking at.
-    fn inspector(&mut self, ui: &mut egui::Ui) {
+    fn inspector(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let Some(view) = self.scan.as_ref() else {
             return;
         };
@@ -2170,6 +2295,7 @@ impl App {
         let share = size as f64 / view.bytes.max(1) as f64 * 100.0;
 
         let mut go: Option<String> = None;
+        let mut stage: Option<String> = None;
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -2245,13 +2371,26 @@ impl App {
                 }
 
                 ui.add_space(12.0);
-                if ui.button("Reveal in Explorer").clicked() {
-                    let _ = std::process::Command::new("explorer").arg(&current).spawn();
-                }
+                ui.horizontal(|ui| {
+                    if ui.button("Open").clicked() {
+                        let _ = std::process::Command::new("explorer").arg(&current).spawn();
+                    }
+                    if ui.button("Reveal").clicked() {
+                        let _ = std::process::Command::new("explorer")
+                            .arg(format!("/select,{current}"))
+                            .spawn();
+                    }
+                    if ui.button("Quarantine").clicked() {
+                        stage = Some(current.clone());
+                    }
+                });
             });
 
         if let Some(path) = go {
             self.zoom = if path == root { None } else { Some(path) };
+        }
+        if let Some(path) = stage {
+            self.quarantine_path(&path, ctx);
         }
     }
 
@@ -2478,6 +2617,46 @@ fn selftest() {
 
 // ----------------------------------------------------------------------- main
 
+/// Windows keeps a light title bar unless asked. Ask once the window exists.
+#[cfg(windows)]
+fn enable_dark_title_bar() {
+    use std::ffi::c_void;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+    }
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(
+            window: isize,
+            attribute: u32,
+            value: *const c_void,
+            size: u32,
+        ) -> i32;
+    }
+
+    let title: Vec<u16> = "opendump\0".encode_utf16().collect();
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let window = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+        if window == 0 {
+            continue;
+        }
+
+        let enabled: u32 = 1;
+        let value = &enabled as *const u32 as *const c_void;
+        // 20 on current Windows, 19 on builds before it.
+        if unsafe { DwmSetWindowAttribute(window, 20, value, 4) } != 0 {
+            unsafe { DwmSetWindowAttribute(window, 19, value, 4) };
+        }
+        return;
+    }
+}
+
+#[cfg(not(windows))]
+fn enable_dark_title_bar() {}
+
 fn main() -> eframe::Result<()> {
     if std::env::args().any(|arg| arg == "--probe") {
         print_memory();
@@ -2488,6 +2667,8 @@ fn main() -> eframe::Result<()> {
         selftest();
         return Ok(());
     }
+
+    std::thread::spawn(enable_dark_title_bar);
 
     let (sender, receiver) = channel();
     let mut app = App::new(sender, receiver);
