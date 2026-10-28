@@ -1272,6 +1272,19 @@ fn install_style(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     style.spacing.item_spacing = egui::vec2(8.0, 7.0);
     style.spacing.button_padding = egui::vec2(11.0, 5.0);
+
+    // egui's desktop default is 40 points per wheel notch - barely one row of a
+    // list. 80 is two rows, which is what Windows users expect. The animation
+    // runs a little longer so the jump glides instead of snapping.
+    ctx.options_mut(|options| options.line_scroll_speed = 80.0);
+    style.scroll_animation =
+        egui::style::ScrollAnimation::new(1400.0, egui::Rangef::new(0.12, 0.35));
+
+    // A floating bar is easier to grab and stops reserving a lane of width.
+    style.spacing.scroll.floating = true;
+    style.spacing.scroll.bar_width = 9.0;
+    style.spacing.scroll.floating_width = 6.0;
+    style.spacing.scroll.dormant_background_opacity = 0.0;
     style.spacing.window_margin = egui::Margin::same(0.0);
 
     style.text_styles = [
