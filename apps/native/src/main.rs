@@ -19,7 +19,7 @@ use opendump_core::{
     inspect_staged,
     list_quarantine, match_rule, mft, parent_of, purge, quarantine, restore, scan, scan_with_progress,
     squarify, thousands, AiTier, Box4, CachedNode, CachedScan, Candidate, ClassifyItem, CompiledRule,
-    FolderDetail, Overrides,
+    DirEntry, FolderDetail, Overrides,
     ExecItem, ExecOptions, Memory, Rule, ScanProgress, StagedDetail, Tier, Verdict,
 };
 
@@ -2991,8 +2991,8 @@ fn cell(
 /// Read the master file table and report what it found.
 ///
 /// Needs Administrator: the volume handle is refused otherwise. Writes
-/// mft-probe.txt into the profile so the result can be read without an
-/// elevated shell.
+/// mft-probe.txt and mft-records.bin into the profile so the result, and the
+/// parsed tree, can be inspected without an elevated shell.
 fn mft_probe() {
     let drive = default_drive();
     println!("reading the MFT of {drive} …");
@@ -3005,6 +3005,32 @@ fn mft_probe() {
             return;
         }
     };
+
+    // Which directories cannot attach to the tree, and what their files weigh.
+    let known: std::collections::HashSet<u64> = records
+        .iter()
+        .filter(|record| record.is_dir && !record.reparse && !record.name.starts_with('$'))
+        .filter(|record| record.record >= 24 || record.record == 5)
+        .map(|record| record.record)
+        .collect();
+
+    let orphan_dirs = records
+        .iter()
+        .filter(|record| record.is_dir && record.record != 5 && record.record >= 24)
+        .filter(|record| !record.reparse && !record.name.starts_with('$'))
+        .filter(|record| !known.contains(&record.parent))
+        .count() as u64;
+
+    let (orphan_files, orphan_bytes) = records
+        .iter()
+        .filter(|record| !record.is_dir && !record.reparse && !record.name.starts_with('$'))
+        .fold((0u64, 0u64), |(count, bytes), record| {
+            if known.contains(&record.parent) {
+                (count, bytes)
+            } else {
+                (count + 1, bytes + record.size)
+            }
+        });
 
     let mut scan = mft::build_report(&drive, &records, elapsed, skipped);
     mft::mark_package_json(&mut scan.dirs);
@@ -3043,13 +3069,18 @@ fn mft_probe() {
             thousands(folders),
             thousands(stats.dirs)
         ),
+        format!(
+            "orphans   {} dirs · {} files · {} bytes with no parent in the tree",
+            thousands(orphan_dirs),
+            thousands(orphan_files),
+            bytes(orphan_bytes)
+        ),
     ];
 
     for line in &lines {
         println!("{line}");
     }
 
-    // Compare with the last walk, which is the only ground truth on hand.
     if let Some(cached) = cache::load(&cache_path(), rules_fingerprint()) {
         let delta_folders = folders as i64 - cached.folders as i64;
         let delta_files = scan.total_files as i64 - cached.total_files as i64;
@@ -3066,7 +3097,121 @@ fn mft_probe() {
         let _ = std::fs::write(base_dir().join("mft-probe.txt"), lines.join("\n"));
     }
 
+    // Dump the parsed structure so the tree can be iterated without another
+    // elevated run: directories with names, files as (parent, size).
+    let dirs: Vec<&mft::FileRecord> = records
+        .iter()
+        .filter(|record| record.is_dir && !record.reparse && !record.name.starts_with('$'))
+        .filter(|record| record.record >= 24 || record.record == 5)
+        .collect();
+    let files: Vec<&mft::FileRecord> = records
+        .iter()
+        .filter(|record| !record.is_dir && !record.reparse && !record.name.starts_with('$'))
+        .filter(|record| record.record >= 24)
+        .collect();
+
+    let mut dump: Vec<u8> = Vec::with_capacity(56 * 1024 * 1024);
+    dump.extend_from_slice(b"ODMFT1");
+    dump.extend_from_slice(&(dirs.len() as u32).to_le_bytes());
+    dump.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    for dir in &dirs {
+        dump.extend_from_slice(&dir.record.to_le_bytes());
+        dump.extend_from_slice(&dir.parent.to_le_bytes());
+        let name = dir.name.as_bytes();
+        dump.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        dump.extend_from_slice(name);
+    }
+    for file in &files {
+        dump.extend_from_slice(&file.parent.to_le_bytes());
+        dump.extend_from_slice(&file.size.to_le_bytes());
+    }
+
+    let dump_path = base_dir().join("mft-records.bin");
+    let _ = std::fs::write(&dump_path, &dump);
+    println!(
+        "dump      {} ({:.0} MB)",
+        dump_path.display(),
+        dump.len() as f64 / 1_048_576.0
+    );
     println!("written   {}", base_dir().join("mft-probe.txt").display());
+}
+
+/// Rebuild the tree from a dump, without touching the volume.
+fn mft_replay() {
+    let path = std::env::args()
+        .skip_while(|arg| arg != "--mft-replay")
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| base_dir().join("mft-records.bin"));
+
+    let Ok(raw) = std::fs::read(&path) else {
+        println!("cannot read {}", path.display());
+        return;
+    };
+    if raw.len() < 14 || &raw[..6] != b"ODMFT1" {
+        println!("not a dump");
+        return;
+    }
+
+    let dir_count = u32::from_le_bytes(raw[6..10].try_into().unwrap()) as usize;
+    let file_count = u32::from_le_bytes(raw[10..14].try_into().unwrap()) as usize;
+    let mut at = 14;
+
+    let mut records: Vec<mft::FileRecord> = Vec::with_capacity(dir_count + file_count);
+    for _ in 0..dir_count {
+        let record = u64::from_le_bytes(raw[at..at + 8].try_into().unwrap());
+        at += 8;
+        let parent = u64::from_le_bytes(raw[at..at + 8].try_into().unwrap());
+        at += 8;
+        let length = u16::from_le_bytes(raw[at..at + 2].try_into().unwrap()) as usize;
+        at += 2;
+        let name = String::from_utf8_lossy(&raw[at..at + length]).to_string();
+        at += length;
+        records.push(mft::FileRecord {
+            record,
+            parent,
+            name,
+            is_dir: true,
+            size: 0,
+            reparse: false,
+        });
+    }
+    for _ in 0..file_count {
+        let parent = u64::from_le_bytes(raw[at..at + 8].try_into().unwrap());
+        at += 8;
+        let size = u64::from_le_bytes(raw[at..at + 8].try_into().unwrap());
+        at += 8;
+        records.push(mft::FileRecord {
+            record: 0,
+            parent,
+            name: String::new(),
+            is_dir: false,
+            size,
+            reparse: false,
+        });
+    }
+
+    let scan = mft::build_report(&drive_of("C:"), &records, 0, 0);
+    println!("dump      {}", path.display());
+    println!("dirs in   {}", thousands(dir_count as u64));
+    println!("files in  {}", thousands(file_count as u64));
+    println!("folders   {}", thousands(scan.dirs.len() as u64));
+    println!("files     {}", thousands(scan.total_files));
+    println!("size      {}", bytes(scan.total_bytes));
+
+    let mut top: Vec<&DirEntry> = scan
+        .dirs
+        .iter()
+        .filter(|entry| entry.path.matches('\\').count() == 1)
+        .collect();
+    top.sort_by(|left, right| right.size.cmp(&left.size));
+    for entry in top.iter().take(8) {
+        println!("  {:<30} {}", entry.path, bytes(entry.size));
+    }
+}
+
+fn drive_of(letter: &str) -> String {
+    format!("{letter}\\")
 }
 
 /// Hardware readout. `--probe` prints this without scanning 400 GB first.
@@ -3172,6 +3317,11 @@ fn main() -> eframe::Result<()> {
 
     if std::env::args().any(|arg| arg == "--mft") {
         mft_probe();
+        return Ok(());
+    }
+
+    if std::env::args().any(|arg| arg == "--mft-replay") {
+        mft_replay();
         return Ok(());
     }
 
