@@ -503,13 +503,17 @@ pub fn mft_extents(record_zero: &[u8], bytes_per_sector: u64) -> Vec<Extent> {
 }
 
 /// Read every MFT record from the volume. Requires Administrator.
+/// "\\.\C:" is how Windows names a raw volume; the colon is part of the device.
+pub fn volume_path(volume: &str) -> String {
+    let mount = volume.trim_end_matches('\\');
+    format!("\\\\.\\{mount}")
+}
+
 pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u128, ReadStats), String> {
     let mut stats = ReadStats::default();
     let started = Instant::now();
 
-    // "C:\" -> "\\.\C:" ; the colon is part of the device name.
-    let mount = volume.trim_end_matches('\\');
-    let path = format!("\\\\\\\\.\\\\{mount}");
+    let path = volume_path(volume);
 
     let mut file = File::open(&path)
         .map_err(|error| format!("cannot open {path} — {error} (needs Administrator)"))?;
@@ -830,6 +834,11 @@ mod tests {
         assert!(parsed.names[0].is_dir);
     }
 
+    #[test]
+    fn the_volume_device_path_is_well_formed() {
+        assert_eq!(volume_path("C:\\"), "\\\\.\\C:");
+        assert_eq!(volume_path("D:"), "\\\\.\\D:");
+    }
     fn dir(record: u64, parent: u64, name: &str) -> FileRecord {
         FileRecord {
             record,
