@@ -935,7 +935,9 @@ fn chip(
             if active { colour } else { pal().line },
         ));
 
-    ui.add(button).clicked()
+    let response = ui.add(button);
+    pressed(ui, &response, 11.0);
+    response.clicked()
 }
 
 /// The small verdict badge beside a row's path.
@@ -948,6 +950,19 @@ fn tier_pill(ui: &mut egui::Ui, tier: Tier) {
         .show(ui, |ui| {
             ui.label(RichText::new(tier_label(tier)).size(9.5).color(colour));
         });
+}
+
+/// A button with an explicit fill draws the same while held down: egui's
+/// pressed state is hidden by the fill override. Darkening the face while the
+/// pointer is on it is what makes a click feel like it landed.
+fn pressed(ui: &egui::Ui, response: &egui::Response, rounding: f32) {
+    if response.is_pointer_button_down_on() {
+        ui.painter().rect_filled(
+            response.rect,
+            egui::Rounding::same(rounding),
+            Color32::from_black_alpha(58),
+        );
+    }
 }
 
 /// One legend swatch with its label.
@@ -1365,6 +1380,9 @@ impl eframe::App for App {
         ] {
             widget.rounding = egui::Rounding::same(8.0);
         }
+        // egui draws a bright ring for the active state, which reads as a focus
+        // ring rather than pressure. The press is shown by darkening instead.
+        visuals.widgets.active.bg_stroke = egui::Stroke::NONE;
         ctx.set_visuals(visuals);
 
         egui::TopBottomPanel::top("bar")
@@ -1426,15 +1444,16 @@ impl eframe::App for App {
                         )
                         .fill(pal().accent)
                         .rounding(egui::Rounding::same(8.0));
-                        if ui.add_enabled(!self.scanning, button).clicked() {
+                        let response = ui.add_enabled(!self.scanning, button);
+                        pressed(ui, &response, 8.0);
+                        if response.clicked() {
                             self.start_scan(ctx);
                         }
 
                         ui.add_space(10.0);
-                        if ui
-                            .button(if is_light() { "Dark" } else { "Light" })
-                            .clicked()
-                        {
+                        let toggle = ui.button(if is_light() { "Dark" } else { "Light" });
+                        pressed(ui, &toggle, 8.0);
+                        if toggle.clicked() {
                             let light = !is_light();
                             set_light(light);
                             save_light(light);
@@ -1796,7 +1815,9 @@ impl App {
                 } else {
                     mix(pal().bg, pal().accent, 0.18)
                 });
-                if ui.add_enabled(enabled, button).clicked() {
+                let response = ui.add_enabled(enabled, button);
+                pressed(ui, &response, 8.0);
+                if response.clicked() {
                     self.quarantine_picked(ctx);
                 }
                 if ui.button("Clear").clicked() {
@@ -1823,16 +1844,13 @@ impl App {
             ui.label(RichText::new("QUARANTINE").size(10.5).color(pal().muted));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enabled = active_count > 0;
-                if ui
-                    .add_enabled(
-                        enabled,
-                        egui::Button::new(
-                            RichText::new("Purge all").color(pal().locked),
-                        )
-                        .fill(mix(pal().bg, pal().locked, 0.18)),
-                    )
-                    .clicked()
-                {
+                let purge = ui.add_enabled(
+                      enabled,
+                      egui::Button::new(RichText::new("Purge all").color(pal().locked))
+                          .fill(mix(pal().bg, pal().locked, 0.18)),
+                  );
+                  pressed(ui, &purge, 8.0);
+                  if purge.clicked() {
                     // Never delete without showing what is inside.
                     let staged = list_quarantine(&base_dir().join("journal.jsonl"));
                     let active: Vec<_> = staged
@@ -2343,10 +2361,9 @@ impl App {
                 Color32::from_rgb(0x3a, 0x1a, 0x1e)
             });
 
-            if ui
-                .add_enabled(gate_ok && !self.ai_running && pending > 0, button)
-                .clicked()
-            {
+            let response = ui.add_enabled(gate_ok && !self.ai_running && pending > 0, button);
+            pressed(ui, &response, 8.0);
+            if response.clicked() {
                 self.run_ai(ctx);
             }
 
@@ -2493,7 +2510,9 @@ impl App {
                 let label = if self.rules_dirty { "Save changes" } else { "Saved" };
                 let button = egui::Button::new(RichText::new(label).color(pal().on_accent))
                     .fill(if self.rules_dirty { pal().accent } else { mix(pal().bg, pal().accent, 0.25) });
-                if ui.add_enabled(self.rules_dirty, button).clicked() {
+                let save = ui.add_enabled(self.rules_dirty, button);
+                pressed(ui, &save, 8.0);
+                if save.clicked() {
                     save_overrides(&self.disabled_rules);
                     // Every cached verdict was produced by the old rule set.
                     let _ = std::fs::remove_file(cache_path());
@@ -2761,6 +2780,9 @@ impl App {
             self.zoom = if path == root { None } else { Some(path) };
         }
         if let Some(path) = stage {
+            // Staging is instant and invisible from here: take the user to the
+            // list that now contains the folder.
+            self.pane = Pane::Quarantine;
             self.quarantine_path(&path, ctx);
         }
         if let Some(path) = inspect_target {
@@ -2948,7 +2970,9 @@ impl App {
                     .fill(fill)
                     .rounding(egui::Rounding::same(8.0))
                     .min_size(egui::vec2(160.0, 32.0));
-                    if ui.add(delete).clicked() && armed {
+                    let delete_response = ui.add(delete);
+                    pressed(ui, &delete_response, 8.0);
+                    if delete_response.clicked() && armed {
                         confirmed = true;
                     }
 
@@ -2956,7 +2980,9 @@ impl App {
                         .fill(mix(pal().bg, pal().text, 0.06))
                         .rounding(egui::Rounding::same(8.0))
                         .min_size(egui::vec2(90.0, 30.0));
-                    if ui.add(keep).clicked() {
+                    let keep_response = ui.add(keep);
+                    pressed(ui, &keep_response, 8.0);
+                    if keep_response.clicked() {
                         cancel = true;
                     }
                 });
