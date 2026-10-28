@@ -1,8 +1,9 @@
 # opendump v2
 
-> **Pre-alpha.** The engine is complete and there is now a minimal desktop window. The supported
-> release is still [opendump v0.5.0](https://github.com/masterdorime/opendump/releases) — it has
-> the full UI, local AI, and an installer.
+> **v0.1.0 — the first public build of the Rust rewrite.** Download it from
+> [Releases](https://github.com/masterdorime/opendump-v2/releases). The supported release is still
+> [opendump v0.5.0](https://github.com/masterdorime/opendump/releases) — it has the full UI, the
+> guided tour, local AI, and an installer.
 
 This repository is the Rust rewrite of opendump's engine, with a native window. It exists
 separately because it is a different stack with a different build, and because the Electron app
@@ -37,16 +38,26 @@ and `purge` require explicit confirmation flags.
 | `types` | `Tier`, `Rule`, `RuleMatch`, `DirEntry` |
 | `tokens` | `%LOCALAPPDATA%`-style expansion against an injectable map |
 | `rules` | rule compilation, AND matcher semantics, `find_candidates` |
-| `scan` | recursive walk with recursive sizes and `package.json` detection |
+| `scan` | recursive walk with recursive sizes, and `scan_any` (MFT first, walk as fallback) |
+| `mft` | NTFS Master File Table reader: boot sector, fixups, run lists, tree build |
 | `executor` | quarantine / restore / purge, journal-first |
+| `layout` | squarified treemap over plain rectangles, no UI dependency |
+| `hardware` | RAM via `GlobalMemoryStatusEx`, free VRAM via `nvidia-smi` |
+| `inspect` | folder contents: extension mix, largest files, hashed-vs-human names |
+| `ai` | local Ollama client, prompt, schema, verdicts capped at REVIEW |
+| `cache` | versioned binary scan cache, rules-hash invalidated |
 | `format` | byte and count formatting, shared by every front end |
 
 **Requirements:** Windows 10 or 11, x64. Nothing else is bundled - the window
 talks to Win32 directly and there is no webview.
 
+- **To use a released build:** download `opendump-0.1.0-windows-x64.zip` from
+  [Releases](https://github.com/masterdorime/opendump-v2/releases), unzip it anywhere, and run
+  `opendump.exe` or `opendump-native.exe`. Keep the `rules\` folder beside the executables — the
+  CLI resolves `rules\rules.json` from there, and the window has the same file compiled in.
+  The binaries are **unsigned**, so SmartScreen shows "Unknown publisher" and may require
+  *More info → Run anyway*.
 - **To build:** Rust stable with the MSVC toolchain (`rustup default stable-msvc`).
-- **To use a released build:** there isn't one yet - see *Status* above. Building
-  is currently the only way in.
 - **Local AI is optional.** It needs [Ollama](https://ollama.com) running on
   `127.0.0.1:11434` with at least one model pulled. Without it the AI view says so
   and everything else works; the app never downloads or starts a model itself.
@@ -117,9 +128,12 @@ The guards, in order:
 
 | | v0.5 (Electron/JS) | v2 (Rust) |
 | --- | --- | --- |
-| Full `C:\` scan | 172 s idle / 299 s loaded | **102.8 s** |
-| Binary / install | 366 MB installed | **1.75 MB** |
-| Folders/sec | ~2,200 | ~3,530 |
+| Full `C:\` scan | 172 s idle / 299 s loaded | **4.9 s via MFT** (elevated) · 75 s walk fallback |
+| Binary / install | 366 MB installed | **1.9 MB CLI · 7.0 MB window**, no installer |
+| Folders/sec | ~2,200 | ~3,530 walking; the MFT path is far higher |
+
+The MFT number is the point of the rewrite: 423.6 GB read in 4.9 s, against the same tree walked
+in 75 s. Without elevation the MFT is unreadable, so the walk is what most users actually get.
 
 Same classifications: `CapCut\Cache` → REVIEW, `CapCut\Projects` → KEEP, `npm-cache` →
 SAFE_PURGE, and `CapCut` flagged as *holds 2.4 GB protected*.
@@ -152,10 +166,10 @@ the language is not what makes opendump safe, the design is.
 | | v0.5 (Electron) | v2 native |
 | --- | --- | --- |
 | Rendered with | Chromium | **egui → GPU** |
-| Installer | 116.6 MB | — (raw exe 6.17 MB) |
+| Installer | 116.6 MB | — (raw exe 7.0 MB) |
 | Idle RAM | 377 MB | **89 MB, 1 process** |
 | RAM after a scan | — | 107 MB |
-| Full `C:\` scan | 172–299 s | **91.7 s** |
+| Full `C:\` scan | 172–299 s | **4.9 s** via MFT · 75 s walking |
 
 `apps/native` draws the same four regions — bar, summary, review list, quarantine — straight
 to the GPU. There is no browser runtime, which is the whole difference: the webview alone costs
@@ -181,7 +195,7 @@ The guided tour and the cloud AI provider are still only in v0.5.
 - **Cloud AI provider** — wired, never tested against a live endpoint
 - **Multi-drive staging** — v0.5 stages on any volume
 - **Elevated tier** — `hiberfil.sys`, the Windows Update cache, DISM
-- **A release** — no installer and no signed build, so today you need Rust to run this
+- **Code signing** — the v0.1.0 binaries are unsigned, so SmartScreen warns once
 
 The engine is complete enough to scan, classify, quarantine, restore and purge from either a
 terminal or a window.

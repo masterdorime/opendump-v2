@@ -5,3 +5,5 @@ target/
 
 # graphify knowledge graph - generated, rebuild with /graphify .
 graphify-out/
+
+dist/

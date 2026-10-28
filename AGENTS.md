@@ -5,8 +5,9 @@ anything; it records the invariants and the traps that already cost time once.
 
 **Companion repo (read its `AGENTS.md` for the full story):**
 `C:\Users\TRISTAN\drive size audit` → https://github.com/masterdorime/opendump — the Electron
-app that is still the shipped product (v0.5.0, 5 releases). This repo has **no release** and
-should not be handed to a user as their daily driver yet: no tour, and no release.
+app that is still the shipped product (v0.5.0, 5 releases). This repo shipped **v0.1.0** on
+2026-10-29 as an unsigned windows-x64 zip, and still should not be handed to a user as their daily
+driver: there is no guided tour and no signed build.
 
 **Last updated:** 2026-10-29 · last code commit `1bfd9ca` (docs commits follow) · working tree
 clean · CI green.
@@ -26,7 +27,7 @@ clean · CI green.
 
 | | |
 | --- | --- |
-| Version | 0.1.0, unreleased |
+| Version | 0.1.0, **released 2026-10-29** (`v0.1.0`, unsigned windows-x64 zip) |
 | Tests | **73** (`cargo test --workspace`) |
 | Lines | **7,865** Rust |
 | Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.93 MB |
@@ -45,18 +46,22 @@ Correctness anchor: totals match `robocopy /L` exactly on `Users` (223.1 GB / 99
 ## 2. Layout
 
 ```
-crates/opendump-core/   1,657 src + 530 test lines
+crates/opendump-core/   3,702 src + 568 test lines
   types.rs      Tier · Rule · RuleMatch · DirEntry
   tokens.rs     %LOCALAPPDATA%-style expansion, injectable map (tests rely on this)
   rules.rs      compile · AND matchers · find_candidates · parent_of/depth_of (public)
-  scan.rs       recursive walk; one public fn scan(root) -> ScanReport
+  scan.rs       recursive walk + scan_any (MFT first, walk as fallback)
+  mft.rs        NTFS Master File Table reader: boot sector, fixups, run lists, tree build
   executor.rs   quarantine · restore · purge · journal · inspect_staged
   layout.rs     squarified treemap over plain Box4 rects — no UI dependency
   hardware.rs   GlobalMemoryStatusEx for RAM, nvidia-smi for free VRAM
+  inspect.rs    folder contents: extension mix, largest files, hashed-vs-human names
+  ai.rs         localhost Ollama client, prompt, schema, parse_verdicts (REVIEW ceiling)
+  cache.rs      versioned binary scan cache, front-coded paths, rules-hash invalidated
   format.rs     bytes() · thousands()  — shared by CLI and window, do not duplicate
 
-crates/opendump-cli/    448 lines   opendump.exe
-apps/native/            1,331 lines opendump-native.exe (egui + glow)
+crates/opendump-cli/    448 lines          opendump.exe
+apps/native/            3,147 lines        opendump-native.exe (egui + glow)
 ```
 
 `apps/native/src/main.rs` is one file on purpose. Grep the function name; line numbers drift
@@ -64,7 +69,8 @@ every session and were removed here on purpose:
 
 ```
 consts    BG PANEL LINE TEXT MUTED DIM ACCENT + SAFE REVIEW KEEP LOCKED + ON_ACCENT
-structs   NodeInfo · Pane(Map/Review/Quarantine) · Visual · MapCache · ScanView · ConfirmState
+structs   NodeInfo · Pane(Map/Review/Quarantine/Ai/Rules) · Visual · MapCache · ScanView ·
+          StagedView · ConfirmState
 logic     start_scan · quarantine_picked · restore_all · purge_ids · drain · ensure_visuals
 views     summary · review · quarantine_panel · tabs · map · inspector · confirm_modal
 helpers   build_visuals (recursive squarify) · tile_fill (depth lift) · space_meter · metric ·
@@ -165,16 +171,24 @@ rebuild before the window sees it. The CLI reads it from disk (cwd, beside the e
 
 ## 7. What is next
 
-**Release v0.1.0.** Nothing else changes who can use this: today a stranger needs Rust. Both
-binaries already build; a zip plus release notes is an hour, and unsigned means SmartScreen says
-"Unknown publisher" exactly as v1 does.
-
 **Guided tour.** v1's `TourOverlay.tsx` is the reference: steps with a target rect, heading and
 copy, everything else dimmed. In egui the dim is a `layer_painter` fill plus a hole — and note
 trap 3 above, an `Area`'s painter is clipped to its own content.
 
 Then: cloud AI provider (wired in v1, never tested live — test before porting), Exclude from Scan
 (needs the scanner to take a list and the cache to invalidate on it), multi-drive, elevated tier.
+
+**Release recipe** (v0.1.0 shipped this way, 2026-10-29):
+
+```bash
+cargo build --release                 # crates/opendump-cli + core
+cd apps/native && cargo build --release   # the window (own workspace!)
+# stage: opendump.exe, opendump-native.exe, rules/rules.json, README.md, LICENSE
+# zip as opendump-<version>-windows-x64.zip, tag, gh release create
+```
+
+The zip must contain `rules/rules.json` beside the exes — the CLI resolves it there, the window
+compiles the same file in with `include_str!`. A zip without it gives a rule-less CLI.
 
 Already shipped and not to be rebuilt: treemap (`171017e`), meters (`502734b`), cache
 (`498bb04`), local AI (`80a484a`), inspection layer and rules editor (`d026648`), themes
@@ -185,7 +199,9 @@ Already shipped and not to be rebuilt: treemap (`171017e`), meters (`502734b`), 
 ## 8. Verifying
 
 - Engine: `cargo run --release -- --selftest` — folders, files, size, duration, tier counts,
-  no window. Rescan costs ~100 s; there is no cache yet.
+  no window. A cold rescan of `C:\` costs ~90–100 s; the window reuses `scan-cache.bin` on open
+  (rules-hash invalidated), but there is no CLI re-classify switch — editing `rules.json` and
+  relaunching is the current loop.
 - Window: egui has no debug port. Drive it with Win32 — `SetWindowPos` to a known origin
   (`0, 0, 1240, 820`), `SetForegroundWindow`, `SetCursorPos` + `mouse_event`, then
   `Graphics.CopyFromScreen`. With one item staged, the quarantine "Purge all" button is at
@@ -197,7 +213,7 @@ Already shipped and not to be rebuilt: treemap (`171017e`), meters (`502734b`), 
 
 - Add a webview front end. A Tauri shell was built and deleted: 9.98 MB exe, but 316 MB of
   WebView2 at runtime, and it duplicated the window that already existed.
-- Claim this is ready for users. It has no tour, no AI, no scan cache and no signed build, and
+- Claim this is ready for users. It has no guided tour and no signed build, and
   has only ever run on one machine at one DPI.
 - Round-trip source through PowerShell — `Set-Content -Encoding utf8` writes a BOM and
   `Get-Content`/`Set-Content` mangles non-ASCII. Use the editor tools or Node with `utf8`.
