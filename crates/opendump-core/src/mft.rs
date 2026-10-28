@@ -158,6 +158,7 @@ pub fn parse_record(record: &[u8], bytes_per_sector: u64, stats: &mut ReadStats)
     let first_attribute = u16::from_le_bytes([buffer[0x14], buffer[0x15]]) as usize;
     let mut offset = first_attribute;
     let mut found: Option<FileRecord> = None;
+    let mut data_size: Option<u64> = None;
 
     while offset + 16 <= buffer.len() {
         let kind = u32::from_le_bytes(buffer[offset..offset + 4].try_into().ok()?);
@@ -169,10 +170,37 @@ pub fn parse_record(record: &[u8], bytes_per_sector: u64, stats: &mut ReadStats)
             break;
         }
 
-        // Attribute lists mean the record is split; do not guess at the rest.
+        // An attribute list means some attributes live in extension records. The
+        // base record still holds the name and usually the data, and dropping it
+        // orphans the whole subtree - WinSxS is the proof.
         if kind == ATTR_ATTRIBUTE_LIST {
             stats.attribute_list += 1;
-            return None;
+        }
+
+        if kind == ATTR_DATA {
+            // Only the unnamed stream is the file's own size; the rest are
+            // named streams (thumbnails, zone identifiers, ...
+            let stream_name = buffer[offset + 9];
+            if stream_name == 0 {
+                let non_resident = buffer[offset + 8] != 0;
+                if non_resident {
+                    if offset + 0x38 <= buffer.len() {
+                        data_size = Some(u64::from_le_bytes(
+                            buffer[offset + 0x30..offset + 0x38]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        ));
+                    }
+                } else {
+                    data_size = Some(
+                        u32::from_le_bytes(
+                            buffer[offset + 0x10..offset + 0x14]
+                                .try_into()
+                                .unwrap_or([0; 4]),
+                        ) as u64,
+                    );
+                }
+            }
         }
 
         if kind == ATTR_FILE_NAME {
@@ -199,6 +227,15 @@ pub fn parse_record(record: &[u8], bytes_per_sector: u64, stats: &mut ReadStats)
         }
 
         offset += length;
+    }
+
+    // $FILE_NAME's size field is not authoritative: for hard-linked and many
+    // other files NTFS leaves it at zero. The unnamed $DATA stream is.
+    let mut found = found;
+    if let (Some(record), Some(size)) = (found.as_mut(), data_size) {
+        if !record.is_dir {
+            record.size = size;
+        }
     }
 
     match &found {
@@ -643,6 +680,90 @@ mod tests {
         assert_eq!(extents.len(), 2);
         assert_eq!(extents[0], Extent { lcn: 10, clusters: 2 });
         assert_eq!(extents[1], Extent { lcn: -1, clusters: 3 });
+    }
+
+    /// Build a minimal in-use record with a $FILE_NAME and a non-resident $DATA.
+    fn build_record(file_name_size: u64, data_size: u64, is_dir: bool) -> Vec<u8> {
+        let record_size = 1024usize;
+        let mut record = vec![0u8; record_size];
+
+        record[0..4].copy_from_slice(&MFT_RECORD_MAGIC.to_le_bytes());
+        record[4..6].copy_from_slice(&48u16.to_le_bytes()); // update sequence offset
+        record[6..8].copy_from_slice(&3u16.to_le_bytes()); // 1 + 1024/512
+        record[0x14..0x16].copy_from_slice(&56u16.to_le_bytes()); // first attribute
+        record[0x16..0x18].copy_from_slice(&0x01u16.to_le_bytes()); // in use
+
+        // --- FILE_NAME (resident)
+        let name: Vec<u16> = "node_modules".encode_utf16().collect();
+        let value_len = 0x42 + name.len() * 2;
+        let attr_len = (24 + value_len + 7) & !7;
+        let mut at = 56;
+
+        record[at..at + 4].copy_from_slice(&ATTR_FILE_NAME.to_le_bytes());
+        record[at + 4..at + 8].copy_from_slice(&(attr_len as u32).to_le_bytes());
+        record[at + 0x10..at + 0x14].copy_from_slice(&(value_len as u32).to_le_bytes());
+        record[at + 0x14..at + 0x16].copy_from_slice(&24u16.to_le_bytes());
+
+        let value = at + 24;
+        record[value..value + 8].copy_from_slice(&ROOT_RECORD.to_le_bytes());
+        record[value + 0x30..value + 0x38].copy_from_slice(&file_name_size.to_le_bytes());
+        let flags: u32 = if is_dir { 0x1000_0000 } else { 0x80 };
+        record[value + 0x38..value + 0x3C].copy_from_slice(&flags.to_le_bytes());
+        record[value + 0x40] = name.len() as u8;
+        record[value + 0x41] = 1; // Win32 namespace
+        for (index, unit) in name.iter().enumerate() {
+            let at = value + 0x42 + index * 2;
+            record[at..at + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+
+        // --- DATA (non-resident), real size at +0x30
+        at += attr_len;
+        let data_len = 0x48usize;
+        record[at..at + 4].copy_from_slice(&ATTR_DATA.to_le_bytes());
+        record[at + 4..at + 8].copy_from_slice(&(data_len as u32).to_le_bytes());
+        record[at + 8] = 1; // non-resident
+        record[at + 0x20..at + 0x22].copy_from_slice(&0x40u16.to_le_bytes()); // run offset
+        record[at + 0x30..at + 0x38].copy_from_slice(&data_size.to_le_bytes());
+        record[at + 0x40] = 0x11; // one-byte length, one-byte offset
+        record[at + 0x41] = 0x01;
+        record[at + 0x42] = 0x10;
+        record[at + 0x43] = 0x00; // end of run list
+
+        at += data_len;
+        record[at..at + 4].copy_from_slice(&ATTR_END.to_le_bytes());
+
+        // --- fixup, applied last so it covers the finished buffer
+        record[48..50].copy_from_slice(&1u16.to_le_bytes());
+        for sector in 1..3u16 {
+            let position = sector as usize * 512 - 2;
+            record[50 + (sector as usize - 1) * 2..52 + (sector as usize - 1) * 2]
+                .copy_from_slice(&0xBEEFu16.to_le_bytes());
+            record[position..position + 2].copy_from_slice(&1u16.to_le_bytes());
+        }
+
+        record
+    }
+
+    #[test]
+    fn the_data_stream_size_wins_over_the_name_copy() {
+        // Real case: a 24 GB file whose $FILE_NAME size field reads zero.
+        let record = build_record(0, 24 * 1024 * 1024 * 1024, false);
+        let mut stats = ReadStats::default();
+        let parsed = parse_record(&record, 512, &mut stats).expect("parse");
+
+        assert_eq!(parsed.name, "node_modules");
+        assert!(!parsed.is_dir);
+        assert_eq!(parsed.size, 24 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn a_directory_keeps_zero_size_even_with_a_data_attribute() {
+        let record = build_record(0, 4096, true);
+        let mut stats = ReadStats::default();
+        let parsed = parse_record(&record, 512, &mut stats).expect("parse");
+
+        assert!(parsed.is_dir);
+        assert_eq!(parsed.size, 0, "a directory's size comes from its children");
     }
 
     fn dir(record: u64, parent: u64, name: &str) -> FileRecord {

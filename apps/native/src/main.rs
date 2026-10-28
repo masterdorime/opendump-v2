@@ -3052,7 +3052,7 @@ fn mft_probe() {
             thousands(stats.in_use), thousands(stats.parsed), thousands(stats.not_in_use)
         ),
         format!(
-            "rejects   fixup {} · attr-list {} · no-name {} · bad-magic {}",
+            "parse     fixup-fail {} · with-list {} · nameless {} · bad-magic {}",
             thousands(stats.bad_fixup),
             thousands(stats.attribute_list),
             thousands(stats.no_name),
