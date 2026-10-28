@@ -683,7 +683,14 @@ impl App {
                     self.space = hardware::disk_space(&self.scan_root);
                 }
                 Message::Progress(progress) => self.progress = Some(progress),
-                Message::AiStatus(models) => self.ai_models = models,
+                Message::AiStatus(models) => {
+                    // The default tag is the model this was developed against;
+                    // on any other machine it may not exist.
+                    if !models.is_empty() && !models.iter().any(|name| name == &self.ai_model) {
+                        self.ai_model = models[0].clone();
+                    }
+                    self.ai_models = models;
+                }
                 Message::AiProgress(done, total) => self.ai_progress = (done, total),
                 Message::AiDone(verdicts) => {
                     self.ai_running = false;
@@ -1394,11 +1401,11 @@ impl eframe::App for App {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let label = if self.scanning {
-                            "Scanning…"
+                            "Scanning…".to_string()
                         } else if self.scan.is_some() {
-                            "Rescan"
+                            "Rescan".to_string()
                         } else {
-                            "Scan C:\\"
+                            format!("Scan {}", self.scan_root.trim_end_matches('\\'))
                         };
                         let button = egui::Button::new(
                             RichText::new(label).color(pal().on_accent).strong(),

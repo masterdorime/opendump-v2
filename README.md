@@ -41,8 +41,18 @@ and `purge` require explicit confirmation flags.
 | `executor` | quarantine / restore / purge, journal-first |
 | `format` | byte and count formatting, shared by every front end |
 
+**Requirements:** Windows 10 or 11, x64. Nothing else is bundled - the window
+talks to Win32 directly and there is no webview.
+
+- **To build:** Rust stable with the MSVC toolchain (`rustup default stable-msvc`).
+- **To use a released build:** there isn't one yet - see *Status* above. Building
+  is currently the only way in.
+- **Local AI is optional.** It needs [Ollama](https://ollama.com) running on
+  `127.0.0.1:11434` with at least one model pulled. Without it the AI view says so
+  and everything else works; the app never downloads or starts a model itself.
+
 ```bash
-cargo test          # 26 tests: 10 rules, 3 scanner, 11 executor, 2 formatting
+cargo test          # 62 tests across core, CLI and the window
 cargo build --release
 ```
 
