@@ -29,19 +29,85 @@ const LOGO_SIDE: usize = 64;
 
 // ------------------------------------------------------------------- palette
 
-const BG: Color32 = Color32::from_rgb(0x0a, 0x06, 0x07);
-const PANEL: Color32 = Color32::from_rgb(0x15, 0x0c, 0x0e);
-const LINE: Color32 = Color32::from_rgb(0x30, 0x1b, 0x1f);
-const TEXT: Color32 = Color32::from_rgb(0xf6, 0xec, 0xed);
-const MUTED: Color32 = Color32::from_rgb(0xab, 0x94, 0x98);
-const DIM: Color32 = Color32::from_rgb(0x77, 0x5e, 0x62);
-const ACCENT: Color32 = Color32::from_rgb(0xe0, 0x2b, 0x3c);
-/// Text that sits on `ACCENT` fills.
-const ON_ACCENT: Color32 = Color32::from_rgb(0xff, 0xf4, 0xf5);
-const SAFE: Color32 = Color32::from_rgb(0x2f, 0xc8, 0x6a);
-const REVIEW: Color32 = Color32::from_rgb(0xf5, 0x9e, 0x0b);
-const KEEP: Color32 = Color32::from_rgb(0x4d, 0x8d, 0xf7);
-const LOCKED: Color32 = Color32::from_rgb(0xff, 0x2d, 0x55);
+const INK: Color32 = Color32::from_rgb(0x12, 0x08, 0x0a);
+
+/// Chrome is greys plus red. Data keeps the four tier colours, in both modes.
+#[derive(Clone, Copy)]
+struct Palette {
+    bg: Color32,
+    panel: Color32,
+    line: Color32,
+    text: Color32,
+    muted: Color32,
+    dim: Color32,
+    accent: Color32,
+    on_accent: Color32,
+    safe: Color32,
+    review: Color32,
+    keep: Color32,
+    locked: Color32,
+}
+
+const DARK_PAL: Palette = Palette {
+    bg: Color32::from_rgb(0x0b, 0x0a, 0x0a),
+    panel: Color32::from_rgb(0x13, 0x10, 0x11),
+    line: Color32::from_rgb(0x26, 0x20, 0x21),
+    text: Color32::from_rgb(0xed, 0xe9, 0xe9),
+    muted: Color32::from_rgb(0x9c, 0x92, 0x94),
+    dim: Color32::from_rgb(0x6b, 0x60, 0x62),
+    accent: Color32::from_rgb(0xe0, 0x2b, 0x3c),
+    on_accent: Color32::from_rgb(0xff, 0xf4, 0xf5),
+    safe: Color32::from_rgb(0x2f, 0xca, 0x6a),
+    review: Color32::from_rgb(0xf5, 0x9e, 0x0b),
+    keep: Color32::from_rgb(0x4d, 0x8d, 0xf7),
+    locked: Color32::from_rgb(0xff, 0x2d, 0x55),
+};
+
+/// Light: warm paper, deeper accent (the dark red fails contrast on white),
+/// and darker tiers so a 40%-alpha tint still reads as a colour.
+const LIGHT_PAL: Palette = Palette {
+    bg: Color32::from_rgb(0xf7, 0xf5, 0xf5),
+    panel: Color32::from_rgb(0xfc, 0xfa, 0xf9),
+    line: Color32::from_rgb(0xde, 0xd7, 0xd7),
+    text: Color32::from_rgb(0x1a, 0x14, 0x16),
+    muted: Color32::from_rgb(0x6b, 0x60, 0x62),
+    dim: Color32::from_rgb(0x94, 0x8a, 0x8c),
+    accent: Color32::from_rgb(0xc4, 0x1e, 0x2f),
+    on_accent: Color32::from_rgb(0xff, 0xff, 0xff),
+    safe: Color32::from_rgb(0x15, 0x80, 0x3d),
+    review: Color32::from_rgb(0xb4, 0x53, 0x09),
+    keep: Color32::from_rgb(0x1d, 0x4e, 0xd8),
+    locked: Color32::from_rgb(0xc8, 0x10, 0x2e),
+};
+
+static IS_LIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn pal() -> Palette {
+    if IS_LIGHT.load(std::sync::atomic::Ordering::Relaxed) {
+        LIGHT_PAL
+    } else {
+        DARK_PAL
+    }
+}
+
+fn is_light() -> bool {
+    IS_LIGHT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn set_light(on: bool) {
+    IS_LIGHT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Blend over into base. Used everywhere a shade has to exist in both modes.
+fn mix(base: Color32, over: Color32, alpha: f32) -> Color32 {
+    let alpha = alpha.clamp(0.0, 1.0);
+    let blend = |a: u8, b: u8| (a as f32 * (1.0 - alpha) + b as f32 * alpha) as u8;
+    Color32::from_rgb(
+        blend(base.r(), over.r()),
+        blend(base.g(), over.g()),
+        blend(base.b(), over.b()),
+    )
+}
 
 // --------------------------------------------------------------------- model
 
@@ -132,6 +198,29 @@ fn base_dir() -> PathBuf {
     std::env::var("APPDATA")
         .map(|appdata| PathBuf::from(appdata).join("opendump-native"))
         .unwrap_or_else(|_| PathBuf::from(".opendump-native"))
+}
+
+/// UI preferences; small enough to rewrite whole on every change.
+fn settings_path() -> PathBuf {
+    base_dir().join("settings.json")
+}
+
+fn load_light() -> bool {
+    std::fs::read_to_string(settings_path())
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.get("light").and_then(|flag| flag.as_bool()))
+        .unwrap_or(false)
+}
+
+fn save_light(light: bool) {
+    if let Some(parent) = settings_path().parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(
+        settings_path(),
+        serde_json::json!({ "light": light }).to_string(),
+    );
 }
 
 fn cache_path() -> PathBuf {
@@ -295,6 +384,8 @@ struct App {
 
 impl App {
     fn new(sender: Sender<Message>, receiver: Receiver<Message>) -> Self {
+        set_light(load_light());
+
         let mut app = Self {
             sender,
             receiver,
@@ -675,18 +766,18 @@ fn metric(ui: &mut egui::Ui, label: &str, values: Option<(u64, u64)>) {
             let used = total.saturating_sub(free);
             let headroom = free as f32 / total as f32;
             let color = if headroom < 0.10 {
-                LOCKED
+                pal().locked
             } else if headroom < 0.25 {
-                REVIEW
+                pal().review
             } else {
-                MUTED
+                pal().muted
             };
             (
                 format!("{:.1}/{:.1} GB", used as f64 / GB, total as f64 / GB),
                 color,
             )
         }
-        _ => ("—".to_string(), DIM),
+        _ => ("—".to_string(), pal().dim),
     };
 
     // One widget, not a nested `vertical`: inside a right-to-left layout a
@@ -718,7 +809,7 @@ fn on_fill(fill: Color32) -> Color32 {
     if luma > 100.0 {
         Color32::from_rgb(0x12, 0x08, 0x0a)
     } else {
-        TEXT
+        pal().text
     }
 }
 
@@ -726,22 +817,29 @@ fn on_fill(fill: Color32) -> Color32 {
 /// as you drill. Category is the primary signal — the map is read by verdict —
 /// so the hue never shifts away from the tier, only its weight.
 fn tile_fill(tier: Option<Tier>, depth: usize) -> Color32 {
-    let alpha = 0.34 + (depth.min(6) as f32) * 0.075;
+    // On dark, deeper is brighter. On light, deeper is darker: mixing into a
+    // near-white page gives that for free, the alpha does the work.
+    let alpha = if is_light() {
+        0.26 + (depth.min(6) as f32) * 0.095
+    } else {
+        0.34 + (depth.min(6) as f32) * 0.075
+    };
 
     let (r, g, b) = match tier {
         Some(Tier::SafePurge) => (0x22, 0xc5, 0x5e),
         Some(Tier::Review) => (0xf5, 0x9e, 0x0b),
         Some(Tier::Keep) => (0x3b, 0x82, 0xf6),
         Some(Tier::Locked) => (0xef, 0x44, 0x44),
-        None => (0x4e, 0x3f, 0x43),
+        None => {
+            if is_light() {
+                (0x9a, 0x8a, 0x8d)
+            } else {
+                (0x4e, 0x3f, 0x43)
+            }
+        }
     };
 
-    let mix = |base: u8, over: u8| (base as f32 * (1.0 - alpha) + over as f32 * alpha) as u8;
-    Color32::from_rgb(
-        mix(BG.r(), r),
-        mix(BG.g(), g),
-        mix(BG.b(), b),
-    )
+    mix(pal().bg, Color32::from_rgb(r, g, b), alpha)
 }
 
 fn tier_index(tier: Tier) -> usize {
@@ -773,17 +871,17 @@ fn chip(
     let rich = if active {
         RichText::new(text)
             .size(10.0)
-            .color(Color32::from_rgb(0x16, 0x0b, 0x0d))
+            .color(pal().on_accent)
     } else {
-        RichText::new(text).size(10.0).color(MUTED)
+        RichText::new(text).size(10.0).color(pal().muted)
     };
 
     let button = egui::Button::new(rich)
-        .fill(if active { colour } else { PANEL })
+        .fill(if active { colour } else { pal().panel })
         .rounding(egui::Rounding::same(11.0))
         .stroke(egui::Stroke::new(
             1.0_f32,
-            if active { colour } else { LINE },
+            if active { colour } else { pal().line },
         ));
 
     ui.add(button).clicked()
@@ -805,7 +903,7 @@ fn tier_pill(ui: &mut egui::Ui, tier: Tier) {
 fn legend_item(ui: &mut egui::Ui, colour: Color32, text: &str) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 2.0, colour);
-    ui.label(RichText::new(text).size(9.5).color(MUTED));
+    ui.label(RichText::new(text).size(9.5).color(pal().muted));
     ui.add_space(10.0);
 }
 
@@ -834,13 +932,22 @@ fn size_fill(size: u64) -> Color32 {
     const MB: u64 = 1024 * 1024;
     const GB: u64 = 1024 * MB;
 
-    let ramp = [
+    // Bigger is later in the ramp: brighter on dark, darker on light.
+    const DARK_RAMP: [(u8, u8, u8); 6] = [
         (0x1b, 0x1f, 0x26),
         (0x28, 0x30, 0x3b),
         (0x39, 0x47, 0x57),
         (0x50, 0x63, 0x78),
         (0x6d, 0x86, 0x9e),
         (0x93, 0xaf, 0xc6),
+    ];
+    const LIGHT_RAMP: [(u8, u8, u8); 6] = [
+        (0xec, 0xe6, 0xe6),
+        (0xd6, 0xcd, 0xce),
+        (0xb9, 0xae, 0xb0),
+        (0x91, 0x85, 0x87),
+        (0x5f, 0x54, 0x56),
+        (0x30, 0x29, 0x2b),
     ];
 
     let index = match size {
@@ -852,7 +959,11 @@ fn size_fill(size: u64) -> Color32 {
         _ => 0,
     };
 
-    let (r, g, b) = ramp[index];
+    let (r, g, b) = if is_light() {
+        LIGHT_RAMP[index]
+    } else {
+        DARK_RAMP[index]
+    };
     Color32::from_rgb(r, g, b)
 }
 
@@ -978,7 +1089,7 @@ fn build_visuals(
 
         let child_path = item.path;
         // A folder inherits the nearest classified verdict above it, so a
-        // scratch folder inside a REVIEW tree reads as review rather than as
+        // scratch folder inside a pal().review tree reads as review rather than as
         // another grey box. Its own tier always wins.
         let tier = item.tier.or(inherited);
 
@@ -1029,11 +1140,11 @@ fn space_meter(ui: &mut egui::Ui, space: Option<(u64, u64)>) {
     let used = total.saturating_sub(free);
     let ratio = (used as f64 / total as f64) as f32;
     let colour = if ratio > 0.92 {
-        LOCKED
+        pal().locked
     } else if ratio > 0.82 {
-        REVIEW
+        pal().review
     } else {
-        ACCENT
+        pal().accent
     };
 
     // Fixed size on purpose: a nested layout inside the right-to-left header
@@ -1045,11 +1156,11 @@ fn space_meter(ui: &mut egui::Ui, space: Option<(u64, u64)>) {
             ui.label(
                 RichText::new(format!("{:.1} GB free", free as f64 / GB))
                     .size(10.0)
-                    .color(TEXT),
+                    .color(pal().text),
             );
             let (rect, _) = ui.allocate_exact_size(egui::vec2(140.0, 4.0), egui::Sense::hover());
             ui.painter()
-                .rect_filled(rect, 2.0, Color32::from_rgb(0x2c, 0x18, 0x1c));
+                .rect_filled(rect, 2.0, mix(pal().bg, pal().text, 0.12));
             let mut filled = rect;
             filled.set_width(rect.width() * ratio.clamp(0.0, 1.0));
             ui.painter().rect_filled(filled, 2.0, colour);
@@ -1059,10 +1170,10 @@ fn space_meter(ui: &mut egui::Ui, space: Option<(u64, u64)>) {
 
 fn tier_color(tier: Tier) -> Color32 {
     match tier {
-        Tier::SafePurge => SAFE,
-        Tier::Review => REVIEW,
-        Tier::Keep => KEEP,
-        Tier::Locked => LOCKED,
+        Tier::SafePurge => pal().safe,
+        Tier::Review => pal().review,
+        Tier::Keep => pal().keep,
+        Tier::Locked => pal().locked,
     }
 }
 
@@ -1120,13 +1231,13 @@ fn install_style(ctx: &egui::Context) {
     .into();
 
     let visuals = &mut style.visuals;
-    visuals.panel_fill = BG;
-    visuals.window_fill = PANEL;
-    visuals.extreme_bg_color = BG;
-    visuals.faint_bg_color = PANEL;
-    visuals.override_text_color = Some(TEXT);
+    visuals.panel_fill = pal().bg;
+    visuals.window_fill = pal().panel;
+    visuals.extreme_bg_color = pal().bg;
+    visuals.faint_bg_color = pal().panel;
+    visuals.override_text_color = Some(pal().text);
     visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(224, 43, 60, 56);
-    visuals.selection.stroke = egui::Stroke::new(1.0_f32, ACCENT);
+    visuals.selection.stroke = egui::Stroke::new(1.0_f32, pal().accent);
 
     for widget in [
         &mut visuals.widgets.inactive,
@@ -1135,18 +1246,19 @@ fn install_style(ctx: &egui::Context) {
         &mut visuals.widgets.open,
     ] {
         widget.rounding = egui::Rounding::same(7.0);
-        widget.fg_stroke = egui::Stroke::new(1.0_f32, TEXT);
-        widget.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
-        widget.bg_fill = PANEL;
-        widget.weak_bg_fill = PANEL;
+        widget.fg_stroke = egui::Stroke::new(1.0_f32, pal().text);
+        widget.bg_stroke = egui::Stroke::new(1.0_f32, pal().line);
+        widget.bg_fill = pal().panel;
+        widget.weak_bg_fill = pal().panel;
     }
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x24, 0x12, 0x16);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x24, 0x12, 0x16);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(0x53, 0x24, 0x2c));
-    visuals.widgets.active.bg_fill = Color32::from_rgb(0x24, 0x12, 0x16);
-    visuals.widgets.noninteractive.bg_fill = PANEL;
-    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
-    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, MUTED);
+    let hover = mix(pal().bg, pal().text, 0.07);
+    visuals.widgets.hovered.bg_fill = hover;
+    visuals.widgets.hovered.weak_bg_fill = hover;
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, pal().line);
+    visuals.widgets.active.bg_fill = hover;
+    visuals.widgets.noninteractive.bg_fill = pal().panel;
+    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, pal().line);
+    visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, pal().muted);
 
     ctx.set_style(style);
 }
@@ -1169,25 +1281,44 @@ impl eframe::App for App {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
 
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = BG;
-        visuals.window_fill = PANEL;
-        visuals.extreme_bg_color = PANEL;
-        visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
-        visuals.override_text_color = Some(TEXT);
+        let mut visuals = if is_light() {
+            egui::Visuals::light()
+        } else {
+            egui::Visuals::dark()
+        };
+        visuals.panel_fill = pal().bg;
+        visuals.window_fill = pal().panel;
+        visuals.extreme_bg_color = pal().panel;
+        visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, pal().line);
+        visuals.override_text_color = Some(pal().text);
         ctx.set_visuals(visuals);
 
         egui::TopBottomPanel::top("bar")
-            .frame(egui::Frame::none().fill(PANEL).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
+            .frame(egui::Frame::none().fill(pal().panel).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     match &self.logo {
                         Some(logo) => {
-                            ui.image((logo.id(), egui::vec2(26.0, 26.0)));
+                            // The mark is white on transparent: give it an ink
+                            // plate so it survives a light page.
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(26.0, 26.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect_filled(rect, 5.0, INK);
+                            ui.painter().image(
+                                logo.id(),
+                                rect.shrink(1.0),
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                Color32::WHITE,
+                            );
                         }
                         None => {
                             ui.label(
-                                RichText::new("od").color(ACCENT).strong().monospace().size(15.0),
+                                RichText::new("od").color(pal().accent).strong().monospace().size(15.0),
                             );
                         }
                     }
@@ -1205,7 +1336,7 @@ impl eframe::App for App {
                             ),
                             None => "native core · nothing scanned yet".to_string(),
                         };
-                        ui.label(RichText::new(subtitle).size(11.0).color(MUTED).monospace());
+                        ui.label(RichText::new(subtitle).size(11.0).color(pal().muted).monospace());
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1217,12 +1348,23 @@ impl eframe::App for App {
                             "Scan C:\\"
                         };
                         let button = egui::Button::new(
-                            RichText::new(label).color(ON_ACCENT).strong(),
+                            RichText::new(label).color(pal().on_accent).strong(),
                         )
-                        .fill(ACCENT)
+                        .fill(pal().accent)
                         .rounding(egui::Rounding::same(7.0));
                         if ui.add_enabled(!self.scanning, button).clicked() {
                             self.start_scan(ctx);
+                        }
+
+                        ui.add_space(10.0);
+                        if ui
+                            .button(if is_light() { "Dark" } else { "Light" })
+                            .clicked()
+                        {
+                            let light = !is_light();
+                            set_light(light);
+                            save_light(light);
+                            std::thread::spawn(apply_title_bar_theme);
                         }
 
                         ui.add_space(18.0);
@@ -1252,14 +1394,14 @@ impl eframe::App for App {
                 .resizable(false)
                 .frame(
                     egui::Frame::none()
-                        .fill(BG)
+                        .fill(pal().bg)
                         .inner_margin(egui::Margin::symmetric(14.0, 12.0)),
                 )
                 .show(ctx, |ui| self.inspector(ui, ctx));
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
+            .frame(egui::Frame::none().fill(pal().bg).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
             .show(ctx, |ui| {
                 self.summary(ui);
                 ui.add_space(10.0);
@@ -1278,9 +1420,9 @@ impl eframe::App for App {
         if let Some((text, at)) = self.toast.clone() {
             if at.elapsed().as_secs() < 6 {
                 egui::TopBottomPanel::bottom("toast")
-                    .frame(egui::Frame::none().fill(PANEL).inner_margin(egui::Margin::symmetric(16.0, 8.0)))
+                    .frame(egui::Frame::none().fill(pal().panel).inner_margin(egui::Margin::symmetric(16.0, 8.0)))
                     .show(ctx, |ui| {
-                        ui.label(RichText::new(text).color(MUTED));
+                        ui.label(RichText::new(text).color(pal().muted));
                     });
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             } else {
@@ -1293,7 +1435,7 @@ impl eframe::App for App {
 impl App {
     fn summary(&mut self, ui: &mut egui::Ui) {
         let Some(view) = &self.scan else {
-            ui.label(RichText::new("Scan the drive to see what can be removed.").color(MUTED));
+            ui.label(RichText::new("Scan the drive to see what can be removed.").color(pal().muted));
             return;
         };
 
@@ -1312,8 +1454,8 @@ impl App {
         let mut open_ai = false;
 
         egui::Frame::none()
-            .fill(PANEL)
-            .stroke(egui::Stroke::new(1.0_f32, LINE))
+            .fill(pal().panel)
+            .stroke(egui::Stroke::new(1.0_f32, pal().line))
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
@@ -1323,7 +1465,7 @@ impl App {
                     stat(ui, "size", &bytes(total));
 
                     // The tier cells are the shortcut into a filtered Review:
-                    // click KEEP here and you are looking at what is kept.
+                    // click pal().keep here and you are looking at what is kept.
                     let classified: u64 = counts.iter().map(|slot| slot.1).sum();
 
                     for tier in [Tier::SafePurge, Tier::Review, Tier::Keep, Tier::Locked] {
@@ -1353,7 +1495,7 @@ impl App {
                         ui,
                         "UNCLASSIFIED",
                         &format!("{} · {:.0}%", bytes(unclassified), share),
-                        Color32::from_rgb(0x8a, 0x74, 0x78),
+                        pal().dim,
                     ) {
                         open_ai = true;
                     }
@@ -1371,7 +1513,7 @@ impl App {
 
     fn review(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let Some(view) = &self.scan else {
-            ui.label(RichText::new("Scan the drive to see what can be removed.").color(MUTED));
+            ui.label(RichText::new("Scan the drive to see what can be removed.").color(pal().muted));
             return;
         };
 
@@ -1390,7 +1532,7 @@ impl App {
         ui.scope(|ui| {
             ui.spacing_mut().button_padding = egui::vec2(9.0, 4.0);
             ui.horizontal_wrapped(|ui| {
-                if chip(ui, "All", total_count, total_bytes, self.filter.is_none(), ACCENT) {
+                if chip(ui, "All", total_count, total_bytes, self.filter.is_none(), pal().accent) {
                     pick = Some(None);
                 }
                 for tier in [Tier::SafePurge, Tier::Review, Tier::Keep, Tier::Locked] {
@@ -1437,7 +1579,7 @@ impl App {
             ui.label(
                 RichText::new(format!("{} of {} folders · {} of {}", visible.len(), thousands(view.folders), bytes(visible.iter().map(|c| c.size).sum::<u64>()), bytes(view.bytes)))
                     .size(10.0)
-                    .color(DIM),
+                    .color(pal().dim),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add(
@@ -1471,9 +1613,9 @@ impl App {
 
                     egui::Frame::none()
                         .fill(if self.picked.contains(&candidate.path) {
-                            Color32::from_rgb(0x22, 0x12, 0x15)
+                            mix(pal().bg, pal().accent, 0.10)
                         } else {
-                            BG
+                            pal().bg
                         })
                         .inner_margin(egui::Margin::symmetric(8.0, 5.0))
                         .show(ui, |ui| {
@@ -1504,7 +1646,7 @@ impl App {
                                             .monospace()
                                             .size(11.5);
                                         if candidate.blocked {
-                                            title = title.color(MUTED);
+                                            title = title.color(pal().muted);
                                         }
                                         ui.label(title);
                                         tier_pill(ui, candidate.tier);
@@ -1512,7 +1654,7 @@ impl App {
                                     ui.label(
                                         RichText::new(&candidate.reason)
                                             .size(10.5)
-                                            .color(DIM),
+                                            .color(pal().dim),
                                     );
                                 });
 
@@ -1523,7 +1665,7 @@ impl App {
                                             RichText::new(bytes(candidate.size))
                                                 .monospace()
                                                 .size(11.5)
-                                                .color(MUTED),
+                                                .color(pal().muted),
                                         );
                                         if candidate.blocked {
                                             ui.label(
@@ -1532,7 +1674,7 @@ impl App {
                                                     bytes(candidate.blocked_bytes)
                                                 ))
                                                 .size(10.0)
-                                                .color(REVIEW),
+                                                .color(pal().review),
                                             );
                                         }
                                     },
@@ -1559,18 +1701,18 @@ impl App {
                     bytes(picked_bytes)
                 ))
                 .size(10.5)
-                .color(MUTED),
+                .color(pal().muted),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enabled = !self.picked.is_empty();
                 let button = egui::Button::new(
-                    RichText::new("Quarantine selected").color(ON_ACCENT),
+                    RichText::new("Quarantine selected").color(pal().on_accent),
                 )
                 .fill(if enabled {
-                    ACCENT
+                    pal().accent
                 } else {
-                    Color32::from_rgb(0x3a, 0x1a, 0x1e)
+                    mix(pal().bg, pal().accent, 0.18)
                 });
                 if ui.add_enabled(enabled, button).clicked() {
                     self.quarantine_picked(ctx);
@@ -1596,16 +1738,16 @@ impl App {
             .sum();
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new("QUARANTINE").size(10.5).color(MUTED));
+            ui.label(RichText::new("QUARANTINE").size(10.5).color(pal().muted));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enabled = active_count > 0;
                 if ui
                     .add_enabled(
                         enabled,
                         egui::Button::new(
-                            RichText::new("Purge all").color(Color32::from_rgb(0xfc, 0xa5, 0xa5)),
+                            RichText::new("Purge all").color(pal().locked),
                         )
-                        .fill(Color32::from_rgb(0x3a, 0x14, 0x14)),
+                        .fill(mix(pal().bg, pal().locked, 0.18)),
                     )
                     .clicked()
                 {
@@ -1636,7 +1778,7 @@ impl App {
                         format!("{} staged · {}", active_count, bytes(total))
                     })
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
                 );
             });
         });
@@ -1647,7 +1789,7 @@ impl App {
             ui.label(
                 RichText::new("Nothing staged. Quarantine is reversible; purge is not.")
                     .size(11.0)
-                    .color(DIM),
+                    .color(pal().dim),
             );
             return;
         }
@@ -1658,16 +1800,16 @@ impl App {
             .show(ui, |ui| {
                 for item in &self.staged {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("■").size(9.0).color(REVIEW));
+                        ui.label(RichText::new("■").size(9.0).color(pal().review));
                         ui.label(RichText::new(pretty(&item.src)).monospace().size(11.0));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 RichText::new(bytes(item.bytes))
                                     .monospace()
                                     .size(11.0)
-                                    .color(MUTED),
+                                    .color(pal().muted),
                             );
-                            ui.label(RichText::new(&item.status).size(10.0).color(DIM));
+                            ui.label(RichText::new(&item.status).size(10.0).color(pal().dim));
                         });
                     });
                 }
@@ -1708,7 +1850,7 @@ impl App {
             ui.label(
                 RichText::new(format!("{:.0}%", ratio * 100.0))
                     .size(10.5)
-                    .color(TEXT)
+                    .color(pal().text)
                     .monospace(),
             );
             if let Some(progress) = &self.progress {
@@ -1720,7 +1862,7 @@ impl App {
                         bytes(progress.bytes)
                     ))
                     .size(10.0)
-                    .color(MUTED)
+                    .color(pal().muted)
                     .monospace(),
                 );
             }
@@ -1728,7 +1870,7 @@ impl App {
                 ui.label(
                     RichText::new(format!("~{eta:.0}s left"))
                         .size(10.0)
-                        .color(DIM)
+                        .color(pal().dim)
                         .monospace(),
                 );
             }
@@ -1739,16 +1881,16 @@ impl App {
             egui::Sense::hover(),
         );
         let painter = ui.painter();
-        painter.rect_filled(track, 3.0, Color32::from_rgb(0x2c, 0x18, 0x1c));
+        painter.rect_filled(track, 3.0, mix(pal().bg, pal().text, 0.12));
         let mut filled = track;
         filled.set_width(track.width() * ratio);
-        painter.rect_filled(filled, 3.0, ACCENT);
+        painter.rect_filled(filled, 3.0, pal().accent);
 
         if let Some(progress) = &self.progress {
             ui.label(
                 RichText::new(clamp_label(&progress.current, 110))
                     .size(9.0)
-                    .color(DIM)
+                    .color(pal().dim)
                     .monospace(),
             );
         }
@@ -1783,7 +1925,7 @@ impl App {
                 };
                 let rich = RichText::new(text)
                     .size(10.5)
-                    .color(if active { TEXT } else { MUTED });
+                    .color(if active { pal().text } else { pal().muted });
                 if ui.selectable_label(active, rich).clicked() {
                     self.pane = pane;
                 }
@@ -1794,7 +1936,7 @@ impl App {
     /// The treemap: area is bytes, colour is safety, click zooms.
     fn map(&mut self, ui: &mut egui::Ui) {
         if self.scan.is_none() {
-            ui.label(RichText::new("Scan the drive to draw the map.").color(MUTED));
+            ui.label(RichText::new("Scan the drive to draw the map.").color(pal().muted));
             return;
         }
 
@@ -1813,11 +1955,11 @@ impl App {
                 RichText::new(pretty(&current))
                     .monospace()
                     .size(11.0)
-                    .color(MUTED),
+                    .color(pal().muted),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 for (mode, label) in [(MapColour::Status, "STATUS"), (MapColour::Size, "SIZE")] {
-                    if chip(ui, label, 0, 0, self.map_colour == mode, ACCENT) {
+                    if chip(ui, label, 0, 0, self.map_colour == mode, pal().accent) {
                         pick_mode = Some(mode);
                     }
                 }
@@ -1842,7 +1984,7 @@ impl App {
             .unwrap_or(view.bytes);
 
         let painter = ui.painter_at(canvas);
-        painter.rect_filled(canvas, egui::Rounding::same(6.0), PANEL);
+        painter.rect_filled(canvas, egui::Rounding::same(6.0), pal().panel);
 
         for visual in &cache.visuals {
             if visual.rect.width() < 1.5 || visual.rect.height() < 1.5 {
@@ -1855,7 +1997,7 @@ impl App {
             };
             painter.rect_filled(visual.rect, 0.0, fill);
             // A hairline in the page colour separates one level from the next.
-            painter.rect_stroke(visual.rect, 0.0, egui::Stroke::new(1.0_f32, BG));
+            painter.rect_stroke(visual.rect, 0.0, egui::Stroke::new(1.0_f32, pal().bg));
 
             let roomy = visual.rect.width() > 54.0 && visual.rect.height() > 20.0;
             if roomy && (visual.leaf || visual.depth == 0) {
@@ -1931,7 +2073,7 @@ impl App {
                                 share_text
                             ))
                             .size(10.5)
-                            .color(MUTED),
+                            .color(pal().muted),
                         );
                         if let Some((tier, reason)) = matched {
                             ui.label(
@@ -1939,12 +2081,12 @@ impl App {
                                     .size(10.5)
                                     .color(tier_color(tier)),
                             );
-                            ui.label(RichText::new(reason).size(10.5).color(DIM));
+                            ui.label(RichText::new(reason).size(10.5).color(pal().dim));
                         } else if visual.path.is_some() {
                             ui.label(
                                 RichText::new("no rule matched · not a candidate")
                                     .size(10.5)
-                                    .color(DIM),
+                                    .color(pal().dim),
                             );
                         }
                     },
@@ -2042,7 +2184,7 @@ impl App {
 
     /// Local AI: the model's opinion on folders the rules do not understand.
     ///
-    /// Nothing here can authorise deletion — the ceiling is REVIEW, and the
+    /// Nothing here can authorise deletion — the ceiling is pal().review, and the
     /// results are shown as suggestions with their confidence attached.
     fn ai_pane(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let reachable = !self.ai_models.is_empty();
@@ -2050,25 +2192,25 @@ impl App {
         let gate_ok = ram_free >= 1_200 * 1024 * 1024;
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new("LOCAL AI").size(10.5).color(MUTED));
+            ui.label(RichText::new("LOCAL AI").size(10.5).color(pal().muted));
             if reachable {
                 ui.label(
                     RichText::new(format!("ollama · {} models", self.ai_models.len()))
                         .size(10.0)
-                        .color(SAFE),
+                        .color(pal().safe),
                 );
             } else {
                 ui.label(
                     RichText::new("ollama not reachable at 127.0.0.1:11434")
                         .size(10.0)
-                        .color(REVIEW),
+                        .color(pal().review),
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     RichText::new(format!("{:.1} GB free", ram_free as f64 / 1024f64.powi(3)))
                         .size(10.0)
-                        .color(if gate_ok { MUTED } else { LOCKED }),
+                        .color(if gate_ok { pal().muted } else { pal().locked }),
                 );
             });
         });
@@ -2079,18 +2221,18 @@ impl App {
             ui.label(
                 RichText::new("Start Ollama, then reopen this view.")
                     .size(11.0)
-                    .color(DIM),
+                    .color(pal().dim),
             );
             return;
         }
 
-        ui.label(RichText::new("MODEL").size(9.5).color(DIM));
+        ui.label(RichText::new("MODEL").size(9.5).color(pal().dim));
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().button_padding = egui::vec2(9.0, 4.0);
             for model in self.ai_models.clone() {
                 let active = model == self.ai_model;
-                if chip(ui, &model, 0, 0, active, ACCENT) {
+                if chip(ui, &model, 0, 0, active, pal().accent) {
                     self.ai_model = model;
                 }
             }
@@ -2110,10 +2252,10 @@ impl App {
             } else {
                 format!("Classify {pending} unclassified folders")
             })
-            .color(ON_ACCENT);
+            .color(pal().on_accent);
 
             let button = egui::Button::new(label).fill(if gate_ok && pending > 0 {
-                ACCENT
+                pal().accent
             } else {
                 Color32::from_rgb(0x3a, 0x1a, 0x1e)
             });
@@ -2129,7 +2271,7 @@ impl App {
                 ui.label(
                     RichText::new("needs 1.2 GB free RAM")
                         .size(10.0)
-                        .color(LOCKED),
+                        .color(pal().locked),
                 );
             } else if self.ai_progress.1 > 0 && self.ai_running {
                 ui.label(
@@ -2138,7 +2280,7 @@ impl App {
                         self.ai_progress.0, self.ai_progress.1
                     ))
                     .size(10.0)
-                    .color(MUTED)
+                    .color(pal().muted)
                     .monospace(),
                 );
             }
@@ -2146,14 +2288,14 @@ impl App {
 
         if let Some(error) = &self.ai_error {
             ui.add_space(6.0);
-            ui.label(RichText::new(error).size(10.5).color(LOCKED));
+            ui.label(RichText::new(error).size(10.5).color(pal().locked));
         }
 
         ui.add_space(10.0);
         ui.label(
             RichText::new(format!("SUGGESTIONS · {}", self.ai_results.len()))
                 .size(9.5)
-                .color(DIM),
+                .color(pal().dim),
         );
         ui.add_space(4.0);
 
@@ -2165,15 +2307,15 @@ impl App {
                     ui.label(
                         RichText::new("Nothing yet. The model only ever sees folders the rules cannot classify.")
                             .size(10.5)
-                            .color(DIM),
+                            .color(pal().dim),
                     );
                 }
 
                 for verdict in &self.ai_results {
                     ui.horizontal(|ui| {
                         let colour = match verdict.tier {
-                            AiTier::Keep => KEEP,
-                            AiTier::Review => REVIEW,
+                            AiTier::Keep => pal().keep,
+                            AiTier::Review => pal().review,
                         };
                         let (rect, _) =
                             ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
@@ -2199,7 +2341,7 @@ impl App {
                                     });
                             });
                             ui.label(
-                                RichText::new(&verdict.reason).size(10.0).color(DIM),
+                                RichText::new(&verdict.reason).size(10.0).color(pal().dim),
                             );
                         });
 
@@ -2213,7 +2355,7 @@ impl App {
                                     ))
                                     .monospace()
                                     .size(10.0)
-                                    .color(MUTED),
+                                    .color(pal().muted),
                                 );
                             },
                         );
@@ -2321,7 +2463,7 @@ impl App {
                         go = parent_of(&current);
                     }
                 });
-                ui.label(RichText::new(&current).monospace().size(9.5).color(DIM));
+                ui.label(RichText::new(&current).monospace().size(9.5).color(pal().dim));
 
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -2331,7 +2473,7 @@ impl App {
                 });
 
                 ui.add_space(12.0);
-                ui.label(RichText::new("CONTENTS").size(9.5).color(DIM));
+                ui.label(RichText::new("CONTENTS").size(9.5).color(pal().dim));
                 ui.add_space(4.0);
 
                 match view.levels.get(&current) {
@@ -2348,10 +2490,10 @@ impl App {
                                 ui.painter().rect_filled(
                                     rect,
                                     2.0,
-                                    node.tier.map(tier_color).unwrap_or(DIM),
+                                    node.tier.map(tier_color).unwrap_or(pal().dim),
                                 );
                                 let label =
-                                    RichText::new(last_component(child)).size(11.0).color(TEXT);
+                                    RichText::new(last_component(child)).size(11.0).color(pal().text);
                                 if ui.selectable_label(false, label).clicked() {
                                     go = Some(child.clone());
                                 }
@@ -2362,7 +2504,7 @@ impl App {
                                             RichText::new(bytes(node.size))
                                                 .monospace()
                                                 .size(10.5)
-                                                .color(MUTED),
+                                                .color(pal().muted),
                                         );
                                     },
                                 );
@@ -2372,7 +2514,7 @@ impl App {
                             ui.label(
                                 RichText::new(format!("+{} more", children.len() - 200))
                                     .size(10.0)
-                                    .color(DIM),
+                                    .color(pal().dim),
                             );
                         }
                     }
@@ -2380,7 +2522,7 @@ impl App {
                         ui.label(
                             RichText::new("Nothing above the display threshold.")
                                 .size(10.5)
-                                .color(DIM),
+                                .color(pal().dim),
                         );
                     }
                 }
@@ -2445,10 +2587,10 @@ impl App {
             .order(egui::Order::Foreground)
             .frame(
                 egui::Frame::window(&ctx.style())
-                    .fill(PANEL)
+                    .fill(pal().panel)
                     .stroke(egui::Stroke::new(
                         1.0_f32,
-                        Color32::from_rgb(0x5a, 0x24, 0x24),
+                        mix(pal().bg, pal().locked, 0.55),
                     )),
             )
             .show(ctx, |ui| {
@@ -2468,7 +2610,7 @@ impl App {
                         "There is no undo after this. Quarantine could be restored; this cannot.",
                     )
                     .size(11.0)
-                    .color(Color32::from_rgb(0xfc, 0xca, 0xca)),
+                    .color(pal().locked),
                 );
                 ui.add_space(8.0);
 
@@ -2482,11 +2624,11 @@ impl App {
                                 format!("{} files", thousands(detail.file_count))
                             })
                             .size(10.0)
-                            .color(DIM),
+                            .color(pal().dim),
                         );
                         for (name, size) in &detail.top_files {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(name).monospace().size(10.5).color(MUTED));
+                                ui.label(RichText::new(name).monospace().size(10.5).color(pal().muted));
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -2494,7 +2636,7 @@ impl App {
                                             RichText::new(bytes(*size))
                                                 .monospace()
                                                 .size(10.5)
-                                                .color(DIM),
+                                                .color(pal().dim),
                                         );
                                     },
                                 );
@@ -2522,7 +2664,7 @@ impl App {
                         RichText::new(format!("Permanently delete {}", bytes(state.bytes)))
                             .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(0x7f, 0x1d, 0x1d));
+                    .fill(mix(pal().bg, pal().locked, 0.85));
                     if ui.add_enabled(state.acknowledged, button).clicked() {
                         confirmed = true;
                     }
@@ -2546,7 +2688,7 @@ fn stat_button(ui: &mut egui::Ui, label: &str, value: &str, colour: Color32) -> 
         egui::vec2(112.0, 32.0),
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
-            ui.label(RichText::new(label).size(9.0).color(DIM));
+            ui.label(RichText::new(label).size(9.0).color(pal().dim));
             ui.label(RichText::new(value).size(11.5).color(colour).monospace());
         },
     );
@@ -2557,7 +2699,7 @@ fn stat_button(ui: &mut egui::Ui, label: &str, value: &str, colour: Color32) -> 
         ui.painter().rect_stroke(
             rect.expand(2.0),
             egui::Rounding::same(5.0),
-            egui::Stroke::new(1.0_f32, LINE),
+            egui::Stroke::new(1.0_f32, pal().line),
         );
     }
 
@@ -2566,7 +2708,7 @@ fn stat_button(ui: &mut egui::Ui, label: &str, value: &str, colour: Color32) -> 
 
 fn stat(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.vertical(|ui| {
-        ui.label(RichText::new(label.to_uppercase()).size(9.0).color(DIM));
+        ui.label(RichText::new(label.to_uppercase()).size(9.0).color(pal().dim));
         ui.label(RichText::new(value).monospace().size(13.0).strong());
     });
     ui.add_space(16.0);
@@ -2634,7 +2776,7 @@ fn selftest() {
 
 /// Windows keeps a light title bar unless asked. Ask once the window exists.
 #[cfg(windows)]
-fn enable_dark_title_bar() {
+fn apply_title_bar_theme() {
     use std::ffi::c_void;
 
     #[link(name = "user32")]
@@ -2659,7 +2801,7 @@ fn enable_dark_title_bar() {
             continue;
         }
 
-        let enabled: u32 = 1;
+        let enabled: u32 = if is_light() { 0 } else { 1 };
         let value = &enabled as *const u32 as *const c_void;
         // 20 on current Windows, 19 on builds before it.
         if unsafe { DwmSetWindowAttribute(window, 20, value, 4) } != 0 {
@@ -2683,7 +2825,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    std::thread::spawn(enable_dark_title_bar);
+    std::thread::spawn(apply_title_bar_theme);
 
     let (sender, receiver) = channel();
     let mut app = App::new(sender, receiver);
