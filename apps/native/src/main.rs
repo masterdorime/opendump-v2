@@ -17,7 +17,7 @@ use serde::Deserialize;
 use opendump_core::{
     ai, apply_overrides, bytes, cache, compile, default_tokens, find_candidates, hardware, inspect_folder,
     inspect_staged,
-    list_quarantine, match_rule, parent_of, purge, quarantine, restore, scan, scan_with_progress,
+    list_quarantine, match_rule, mft, parent_of, purge, quarantine, restore, scan, scan_with_progress,
     squarify, thousands, AiTier, Box4, CachedNode, CachedScan, Candidate, ClassifyItem, CompiledRule,
     FolderDetail, Overrides,
     ExecItem, ExecOptions, Memory, Rule, ScanProgress, StagedDetail, Tier, Verdict,
@@ -2988,6 +2988,65 @@ fn cell(
 
 // ------------------------------------------------------------------- selftest
 
+/// Read the master file table and report what it found.
+///
+/// Needs Administrator: the volume handle is refused otherwise. Writes
+/// mft-probe.txt into the profile so the result can be read without an
+/// elevated shell.
+fn mft_probe() {
+    let drive = default_drive();
+    println!("reading the MFT of {drive} …");
+
+    let (records, info, skipped, elapsed) = match mft::read_records(&drive) {
+        Ok(result) => result,
+        Err(error) => {
+            println!("mft failed: {error}");
+            println!("run this elevated: Start-Process opendump-native.exe -Verb RunAs -ArgumentList --mft");
+            return;
+        }
+    };
+
+    let mut scan = mft::build_report(&drive, &records, elapsed, skipped);
+    mft::mark_package_json(&mut scan.dirs);
+
+    let folders = scan.dirs.len() as u64;
+    let lines = [
+        format!("root      {drive}"),
+        format!("records   {}", thousands(records.len() as u64)),
+        format!("folders   {}", thousands(folders)),
+        format!("files     {}", thousands(scan.total_files)),
+        format!("size      {}", bytes(scan.total_bytes)),
+        format!("read      {:.1}s", elapsed as f64 / 1000.0),
+        format!(
+            "volume    cluster {} B · record {} B · skipped {}",
+            info.bytes_per_cluster, info.record_size, scan.skipped
+        ),
+    ];
+
+    for line in &lines {
+        println!("{line}");
+    }
+
+    // Compare with the last walk, which is the only ground truth on hand.
+    if let Some(cached) = cache::load(&cache_path(), rules_fingerprint()) {
+        let delta_folders = folders as i64 - cached.folders as i64;
+        let delta_files = scan.total_files as i64 - cached.total_files as i64;
+        let delta_bytes = scan.total_bytes as i64 - cached.total_bytes as i64;
+        let comparison = format!(
+            "vs walk   folders {delta_folders:+} · files {delta_files:+} · size {delta_bytes:+} B"
+        );
+        println!("{comparison}");
+        let _ = std::fs::write(
+            base_dir().join("mft-probe.txt"),
+            format!("{}\n{}\n", lines.join("\n"), comparison),
+        );
+    } else {
+        let _ = std::fs::write(base_dir().join("mft-probe.txt"), lines.join("\n"));
+    }
+
+    println!("written   {}", base_dir().join("mft-probe.txt").display());
+}
+
 /// Hardware readout. `--probe` prints this without scanning 400 GB first.
 fn print_memory() {
     const GB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -3086,6 +3145,11 @@ fn enable_dark_title_bar() {}
 fn main() -> eframe::Result<()> {
     if std::env::args().any(|arg| arg == "--probe") {
         print_memory();
+        return Ok(());
+    }
+
+    if std::env::args().any(|arg| arg == "--mft") {
+        mft_probe();
         return Ok(());
     }
 

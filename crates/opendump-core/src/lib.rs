@@ -19,6 +19,7 @@ pub mod format;
 pub mod hardware;
 pub mod inspect;
 pub mod layout;
+pub mod mft;
 pub mod rules;
 pub mod scan;
 pub mod tokens;
@@ -34,6 +35,7 @@ pub use format::{bytes, thousands};
 pub use hardware::{Gpu, Memory};
 pub use inspect::{inspect_folder, FolderDetail};
 pub use layout::{squarify, Box4};
+pub use mft::{build_report, mark_package_json, read_records, FileRecord, VolumeInfo};
 pub use rules::{
     apply_overrides, compile, depth_of, find_candidates, find_unclassified, match_rule, parent_of,
     Candidate, CompiledRule, Overrides, UnclassifiedDir,
