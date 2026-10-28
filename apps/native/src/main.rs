@@ -23,6 +23,10 @@ use opendump_core::{
 
 const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/rules.json"));
 
+/// The app's mark: 64x64 RGBA, pre-decoded so the binary needs no image codec.
+const LOGO_RGBA: &[u8] = include_bytes!("../assets/logo64.rgba");
+const LOGO_SIDE: usize = 64;
+
 // ------------------------------------------------------------------- palette
 
 const BG: Color32 = Color32::from_rgb(0x0a, 0x06, 0x07);
@@ -286,6 +290,7 @@ struct App {
     ai_error: Option<String>,
     map_colour: MapColour,
     search: String,
+    logo: Option<egui::TextureHandle>,
 }
 
 impl App {
@@ -318,6 +323,7 @@ impl App {
             ai_error: None,
             map_colour: MapColour::Status,
             search: String::new(),
+            logo: None,
         };
 
         // Open to the last map when the cache was written by these rules.
@@ -1175,8 +1181,17 @@ impl eframe::App for App {
             .frame(egui::Frame::none().fill(PANEL).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("od").color(ACCENT).strong().monospace().size(15.0));
-                    ui.add_space(4.0);
+                    match &self.logo {
+                        Some(logo) => {
+                            ui.image((logo.id(), egui::vec2(26.0, 26.0)));
+                        }
+                        None => {
+                            ui.label(
+                                RichText::new("od").color(ACCENT).strong().monospace().size(15.0),
+                            );
+                        }
+                    }
+                    ui.add_space(6.0);
                     ui.vertical(|ui| {
                         ui.label(RichText::new("opendump").strong().size(13.5));
                         let subtitle = match &self.scan {
@@ -2678,7 +2693,12 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1240.0, 820.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_title("opendump"),
+            .with_title("opendump")
+            .with_icon(egui::IconData {
+                rgba: LOGO_RGBA.to_vec(),
+                width: LOGO_SIDE as u32,
+                height: LOGO_SIDE as u32,
+            }),
         ..Default::default()
     };
 
@@ -2688,6 +2708,11 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
             install_style(&cc.egui_ctx);
+            app.logo = Some(cc.egui_ctx.load_texture(
+                "logo",
+                egui::ColorImage::from_rgba_unmultiplied([LOGO_SIDE, LOGO_SIDE], LOGO_RGBA),
+                egui::TextureOptions::LINEAR,
+            ));
             if autoscan {
                 app.start_scan(&cc.egui_ctx);
             }
