@@ -40,6 +40,6 @@ pub use rules::{
     apply_overrides, compile, depth_of, find_candidates, find_unclassified, match_rule, parent_of,
     Candidate, CompiledRule, Overrides, UnclassifiedDir,
 };
-pub use scan::{scan, scan_with_progress, ScanProgress, ScanReport};
+pub use scan::{is_drive_root, scan, scan_any, scan_with_progress, ScanProgress, ScanReport};
 pub use tokens::{default_tokens, expand, TokenMap};
 pub use types::{DirEntry, Rule, RuleMatch, Tier};

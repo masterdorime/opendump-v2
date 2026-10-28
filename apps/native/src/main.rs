@@ -17,7 +17,8 @@ use serde::Deserialize;
 use opendump_core::{
     ai, apply_overrides, bytes, cache, compile, default_tokens, find_candidates, hardware, inspect_folder,
     inspect_staged,
-    list_quarantine, match_rule, mft, parent_of, purge, quarantine, restore, scan, scan_with_progress,
+    list_quarantine, match_rule, mft, parent_of, purge, quarantine, restore, scan, scan_any,
+
     squarify, thousands, AiTier, Box4, CachedNode, CachedScan, Candidate, ClassifyItem, CompiledRule,
     DirEntry, FolderDetail, Overrides,
     ExecItem, ExecOptions, Memory, Rule, ScanProgress, StagedDetail, Tier, Verdict,
@@ -476,7 +477,7 @@ impl App {
         std::thread::spawn(move || {
             let _ = sender.send(Message::Started);
             let started = Instant::now();
-            let report = scan_with_progress(Path::new(&root), |progress| {
+            let report = scan_any(Path::new(&root), |progress| {
                 let _ = sender.send(Message::Progress(progress));
                 ctx.request_repaint();
             });

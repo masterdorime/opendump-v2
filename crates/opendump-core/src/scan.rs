@@ -212,6 +212,36 @@ where
     }
 }
 
+/// True for "C:" or "C:\" - the only roots the MFT reader can serve, because it
+/// reads a whole volume and ignores subfolders.
+pub fn is_drive_root(path: &str) -> bool {
+    let trimmed = path.trim_end_matches(['\\', '/']);
+    trimmed.len() == 2 && trimmed.ends_with(':')
+}
+
+/// Scan a path the cheapest way that works.
+///
+/// A drive root becomes one sequential read of the MFT. Anything else - a
+/// subfolder, a non-NTFS volume, or a process without Administrator - falls
+/// back to the directory walk, which always works but takes minutes.
+pub fn scan_any<F>(root: &Path, on_progress: F) -> ScanReport
+where
+    F: FnMut(ScanProgress),
+{
+    let text = root.to_string_lossy().to_string();
+
+    if is_drive_root(&text) {
+        if let Ok((records, _info, skipped, elapsed, _stats)) = crate::mft::read_records(&text) {
+            let mut report = crate::mft::build_report(&text, &records, elapsed, skipped);
+            // The MFT knows the structure but not what a package.json is.
+            crate::mft::mark_package_json(&mut report.dirs);
+            return report;
+        }
+    }
+
+    scan_with_progress(root, on_progress)
+}
+
 fn is_profile_root(dir: &Path) -> bool {
     let parts: Vec<String> = dir
         .components()
