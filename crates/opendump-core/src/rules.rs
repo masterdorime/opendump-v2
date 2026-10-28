@@ -33,6 +33,100 @@ pub struct Candidate {
     pub blocked_by: Vec<String>,
 }
 
+/// A folder the rules do not understand, reduced to something concrete enough
+/// to ask a model about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnclassifiedDir {
+    pub path: String,
+    pub size: u64,
+    pub files: u64,
+    pub depth: usize,
+}
+
+fn is_unknown(
+    dir: &DirEntry,
+    rules: &[CompiledRule],
+    memo: &mut HashMap<String, bool>,
+) -> bool {
+    let key = normalize(&dir.path);
+    if let Some(value) = memo.get(&key) {
+        return *value;
+    }
+
+    // A display rule is a colour, not a verdict: those folders are still unknown.
+    let unknown = match match_rule(&dir.path, dir.size, rules, dir.has_package_json) {
+        Some(index) => rules[index].display,
+        None => true,
+    };
+
+    memo.insert(key, unknown);
+    unknown
+}
+
+/// Folders worth asking a model about.
+///
+/// Same shape as v1: descend until an unknown folder has no unknown children, so
+/// the model sees a concrete directory rather than `C:\Users\you`. Skip a parent
+/// whose classified children already cover most of it, or the same bytes would
+/// be offered twice.
+pub fn find_unclassified(
+    dirs: &[DirEntry],
+    rules: &[CompiledRule],
+    min_bytes: u64,
+) -> Vec<UnclassifiedDir> {
+    let mut children: HashMap<String, Vec<&DirEntry>> = HashMap::new();
+    let mut big: Vec<&DirEntry> = Vec::new();
+
+    for dir in dirs.iter().filter(|dir| dir.size >= min_bytes) {
+        big.push(dir);
+        if let Some(parent) = parent_of(&dir.path) {
+            children.entry(normalize(&parent)).or_default().push(dir);
+        }
+    }
+
+    let mut memo: HashMap<String, bool> = HashMap::new();
+    let mut out = Vec::new();
+
+    for dir in &big {
+        // A drive root is unknown but useless to ask about.
+        if depth_of(&dir.path) <= 1 {
+            continue;
+        }
+        if !is_unknown(dir, rules, &mut memo) {
+            continue;
+        }
+
+        let key = normalize(&dir.path);
+        let kids = children.get(&key).cloned().unwrap_or_default();
+
+        if kids
+            .iter()
+            .any(|kid| is_unknown(kid, rules, &mut memo))
+        {
+            continue;
+        }
+
+        let covered: u64 = kids
+            .iter()
+            .filter(|kid| !is_unknown(kid, rules, &mut memo))
+            .map(|kid| kid.size)
+            .sum();
+        if covered >= dir.size / 2 && covered > 0 {
+            continue;
+        }
+
+        out.push(UnclassifiedDir {
+            path: dir.path.clone(),
+            size: dir.size,
+            files: dir.files,
+            depth: depth_of(&dir.path),
+        });
+    }
+
+    out.sort_by(|left, right| right.size.cmp(&left.size));
+    out
+}
+
 pub fn compile(rules: &[Rule], tokens: &TokenMap) -> Vec<CompiledRule> {
     rules
         .iter()

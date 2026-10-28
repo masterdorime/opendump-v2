@@ -15,10 +15,10 @@ use eframe::egui::{self, Color32, RichText};
 use serde::Deserialize;
 
 use opendump_core::{
-    bytes, cache, compile, default_tokens, find_candidates, hardware, inspect_staged, list_quarantine,
-    match_rule, parent_of, purge, quarantine, restore, scan, scan_with_progress, squarify,
-    thousands, Box4, CachedNode, CachedScan, Candidate, CompiledRule, ExecItem, ExecOptions, Memory,
-    Rule, ScanProgress, StagedDetail, Tier,
+    ai, bytes, cache, compile, default_tokens, find_candidates, hardware, inspect_staged,
+    list_quarantine, match_rule, parent_of, purge, quarantine, restore, scan, scan_with_progress,
+    squarify, thousands, AiTier, Box4, CachedNode, CachedScan, Candidate, ClassifyItem, CompiledRule,
+    ExecItem, ExecOptions, Memory, Rule, ScanProgress, StagedDetail, Tier, Verdict,
 };
 
 const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/rules.json"));
@@ -60,6 +60,7 @@ enum Pane {
     Map,
     Review,
     Quarantine,
+    Ai,
 }
 
 /// One rectangle in the nested treemap. Parents are pushed before their
@@ -111,6 +112,10 @@ enum Message {
     Action(String),
     Memory(Memory),
     Progress(ScanProgress),
+    AiStatus(Vec<String>),
+    AiProgress(usize, usize),
+    AiDone(Vec<Verdict>),
+    AiError(String),
 }
 
 fn base_dir() -> PathBuf {
@@ -266,6 +271,13 @@ struct App {
     filter: Option<Tier>,
     progress: Option<ScanProgress>,
     scan_started: Option<Instant>,
+    ai_endpoint: String,
+    ai_model: String,
+    ai_models: Vec<String>,
+    ai_running: bool,
+    ai_progress: (usize, usize),
+    ai_results: Vec<Verdict>,
+    ai_error: Option<String>,
 }
 
 impl App {
@@ -289,6 +301,13 @@ impl App {
             filter: None,
             progress: None,
             scan_started: None,
+            ai_endpoint: "127.0.0.1:11434".to_string(),
+            ai_model: "qwen3.5:4b-q4_K_M".to_string(),
+            ai_models: Vec::new(),
+            ai_running: false,
+            ai_progress: (0, 0),
+            ai_results: Vec::new(),
+            ai_error: None,
         };
 
         // Open to the last map when the cache was written by these rules.
@@ -521,6 +540,16 @@ impl App {
                     self.space = hardware::disk_space(&self.scan_root);
                 }
                 Message::Progress(progress) => self.progress = Some(progress),
+                Message::AiStatus(models) => self.ai_models = models,
+                Message::AiProgress(done, total) => self.ai_progress = (done, total),
+                Message::AiDone(verdicts) => {
+                    self.ai_running = false;
+                    self.ai_results = verdicts;
+                }
+                Message::AiError(text) => {
+                    self.ai_running = false;
+                    self.ai_error = Some(text);
+                }
             }
         }
     }
@@ -535,6 +564,62 @@ fn pretty(path: &str) -> String {
         return format!("~{}", &path[home.len()..]);
     }
     path.to_string()
+}
+
+/// Python-style helper: folders the rules do not understand, reduced to leaves.
+fn unclassified_items(view: &ScanView, min_bytes: u64, limit: usize) -> Vec<ClassifyItem> {
+    let mut unknown: Vec<(&String, &NodeInfo)> = view
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.tier.is_none() && node.size >= min_bytes)
+        .collect();
+    unknown.sort_by(|left, right| right.1.size.cmp(&left.1.size));
+
+    let mut out = Vec::new();
+    for (path, node) in unknown {
+        // A drive root is unknown but useless to ask about.
+        if path.trim_end_matches(['\\', '/']).len() <= 2 {
+            continue;
+        }
+
+        // Descend to a concrete folder: a container of other unknown folders is
+        // not the thing to ask about.
+        let has_unknown_child = view
+            .levels
+            .get(path)
+            .map(|kids| {
+                kids.iter().any(|kid| {
+                    view.nodes
+                        .get(kid)
+                        .map(|child| child.tier.is_none() && child.size >= min_bytes)
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if has_unknown_child {
+            continue;
+        }
+
+        out.push(ClassifyItem {
+            path: path.clone(),
+            size: node.size,
+            files: node.files,
+            category: "unclassified".to_string(),
+        });
+        if out.len() >= limit {
+            break;
+        }
+    }
+
+    out
+}
+
+/// Ask Ollama which models exist. Runs once, off the UI thread.
+fn spawn_ai_probe(sender: Sender<Message>, endpoint: String) {
+    std::thread::spawn(move || {
+        let models = ai::models(&endpoint);
+        let _ = sender.send(Message::AiStatus(models));
+    });
 }
 
 /// Poll memory off the UI thread.
@@ -663,8 +748,10 @@ fn chip(
 ) -> bool {
     let text = if size > 0 {
         format!("{label}  {count} · {}", bytes(size))
-    } else {
+    } else if count > 0 {
         format!("{label}  {count}")
+    } else {
+        label.to_string()
     };
 
     let rich = if active {
@@ -1032,6 +1119,7 @@ impl eframe::App for App {
         if !self.probe_started {
             self.probe_started = true;
             spawn_probe(self.sender.clone(), ctx.clone());
+            spawn_ai_probe(self.sender.clone(), self.ai_endpoint.clone());
         }
 
         if self.scanning {
@@ -1129,6 +1217,7 @@ impl eframe::App for App {
                     Pane::Map => self.map(ui),
                     Pane::Review => self.review(ui, ctx),
                     Pane::Quarantine => self.quarantine_panel(ui, ctx),
+                    Pane::Ai => self.ai_pane(ui, ctx),
                 }
             });
 
@@ -1586,6 +1675,7 @@ impl App {
             (Pane::Map, "MAP", 0usize),
             (Pane::Review, "REVIEW", actionable),
             (Pane::Quarantine, "QUARANTINE", held),
+            (Pane::Ai, "AI", self.ai_results.len()),
         ];
 
         ui.horizontal(|ui| {
@@ -1824,6 +1914,237 @@ impl App {
             root: current.to_string(),
             rect: canvas,
             visuals,
+        });
+    }
+
+    /// Local AI: the model's opinion on folders the rules do not understand.
+    ///
+    /// Nothing here can authorise deletion — the ceiling is REVIEW, and the
+    /// results are shown as suggestions with their confidence attached.
+    fn ai_pane(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let reachable = !self.ai_models.is_empty();
+        let ram_free = self.mem.ram_free;
+        let gate_ok = ram_free >= 1_200 * 1024 * 1024;
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("LOCAL AI").size(10.5).color(MUTED));
+            if reachable {
+                ui.label(
+                    RichText::new(format!("ollama · {} models", self.ai_models.len()))
+                        .size(10.0)
+                        .color(SAFE),
+                );
+            } else {
+                ui.label(
+                    RichText::new("ollama not reachable at 127.0.0.1:11434")
+                        .size(10.0)
+                        .color(REVIEW),
+                );
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!("{:.1} GB free", ram_free as f64 / 1024f64.powi(3)))
+                        .size(10.0)
+                        .color(if gate_ok { MUTED } else { LOCKED }),
+                );
+            });
+        });
+
+        ui.add_space(8.0);
+
+        if !reachable {
+            ui.label(
+                RichText::new("Start Ollama, then reopen this view.")
+                    .size(11.0)
+                    .color(DIM),
+            );
+            return;
+        }
+
+        ui.label(RichText::new("MODEL").size(9.5).color(DIM));
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().button_padding = egui::vec2(9.0, 4.0);
+            for model in self.ai_models.clone() {
+                let active = model == self.ai_model;
+                if chip(ui, &model, 0, 0, active, ACCENT) {
+                    self.ai_model = model;
+                }
+            }
+        });
+
+        ui.add_space(10.0);
+
+        let pending = self
+            .scan
+            .as_ref()
+            .map(|view| unclassified_items(view, 64 * 1024 * 1024, 16).len())
+            .unwrap_or(0);
+
+        ui.horizontal(|ui| {
+            let label = RichText::new(if self.ai_running {
+                "Classifying…".to_string()
+            } else {
+                format!("Classify {pending} unclassified folders")
+            })
+            .color(ON_ACCENT);
+
+            let button = egui::Button::new(label).fill(if gate_ok && pending > 0 {
+                ACCENT
+            } else {
+                Color32::from_rgb(0x3a, 0x1a, 0x1e)
+            });
+
+            if ui
+                .add_enabled(gate_ok && !self.ai_running && pending > 0, button)
+                .clicked()
+            {
+                self.run_ai(ctx);
+            }
+
+            if !gate_ok {
+                ui.label(
+                    RichText::new("needs 1.2 GB free RAM")
+                        .size(10.0)
+                        .color(LOCKED),
+                );
+            } else if self.ai_progress.1 > 0 && self.ai_running {
+                ui.label(
+                    RichText::new(format!(
+                        "{} of {}",
+                        self.ai_progress.0, self.ai_progress.1
+                    ))
+                    .size(10.0)
+                    .color(MUTED)
+                    .monospace(),
+                );
+            }
+        });
+
+        if let Some(error) = &self.ai_error {
+            ui.add_space(6.0);
+            ui.label(RichText::new(error).size(10.5).color(LOCKED));
+        }
+
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new(format!("SUGGESTIONS · {}", self.ai_results.len()))
+                .size(9.5)
+                .color(DIM),
+        );
+        ui.add_space(4.0);
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .max_height((ui.available_height() - 20.0).max(160.0))
+            .show(ui, |ui| {
+                if self.ai_results.is_empty() {
+                    ui.label(
+                        RichText::new("Nothing yet. The model only ever sees folders the rules cannot classify.")
+                            .size(10.5)
+                            .color(DIM),
+                    );
+                }
+
+                for verdict in &self.ai_results {
+                    ui.horizontal(|ui| {
+                        let colour = match verdict.tier {
+                            AiTier::Keep => KEEP,
+                            AiTier::Review => REVIEW,
+                        };
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 2.0, colour);
+
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(pretty(&verdict.path))
+                                        .monospace()
+                                        .size(11.0),
+                                );
+                                egui::Frame::none()
+                                    .fill(colour.gamma_multiply(0.22))
+                                    .rounding(egui::Rounding::same(5.0))
+                                    .inner_margin(egui::Margin::symmetric(5.0, 1.0))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            RichText::new(verdict.tier.as_str())
+                                                .size(9.0)
+                                                .color(colour),
+                                        );
+                                    });
+                            });
+                            ui.label(
+                                RichText::new(&verdict.reason).size(10.0).color(DIM),
+                            );
+                        });
+
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{:.0}%",
+                                        verdict.confidence * 100.0
+                                    ))
+                                    .monospace()
+                                    .size(10.0)
+                                    .color(MUTED),
+                                );
+                            },
+                        );
+                    });
+                    ui.add_space(4.0);
+                }
+            });
+    }
+
+    fn run_ai(&mut self, ctx: &egui::Context) {
+        if self.ai_running {
+            return;
+        }
+        let Some(view) = self.scan.as_ref() else {
+            return;
+        };
+
+        let items = unclassified_items(view, 64 * 1024 * 1024, 16);
+        if items.is_empty() {
+            self.ai_error = Some("No unclassified folders above 64 MB.".to_string());
+            return;
+        }
+
+        self.ai_running = true;
+        self.ai_error = None;
+        self.ai_results.clear();
+        self.ai_progress = (0, items.len());
+
+        let sender = self.sender.clone();
+        let ctx = ctx.clone();
+        let endpoint = self.ai_endpoint.clone();
+        let model = self.ai_model.clone();
+        let total = items.len();
+
+        std::thread::spawn(move || {
+            let mut collected = Vec::new();
+            for (index, batch) in items.chunks(8).enumerate() {
+                match ai::classify(&endpoint, &model, batch) {
+                    Ok(verdicts) => collected.extend(verdicts),
+                    Err(error) => {
+                        let _ = sender.send(Message::AiError(error));
+                        ctx.request_repaint();
+                        return;
+                    }
+                }
+                let _ = sender.send(Message::AiProgress(
+                    ((index + 1) * 8).min(total),
+                    total,
+                ));
+                ctx.request_repaint();
+            }
+
+            let _ = sender.send(Message::AiDone(collected));
+            ctx.request_repaint();
         });
     }
 
