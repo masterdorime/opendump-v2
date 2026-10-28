@@ -782,11 +782,14 @@ fn metric(ui: &mut egui::Ui, label: &str, values: Option<(u64, u64)>) {
 
     // One widget, not a nested `vertical`: inside a right-to-left layout a
     // nested block inherits almost no width and wraps to one character per line.
-    ui.label(
-        RichText::new(format!("{label} {text}"))
-            .size(10.0)
-            .color(color)
-            .monospace(),
+    // Same 30 px box as the free-space meter, so every readout shares a baseline.
+    ui.allocate_ui_with_layout(
+        egui::vec2(96.0, 34.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.label(RichText::new(label.to_uppercase()).size(9.5).color(pal().dim));
+            ui.label(RichText::new(text).size(10.5).color(color).monospace());
+        },
     );
 }
 
@@ -870,10 +873,10 @@ fn chip(
 
     let rich = if active {
         RichText::new(text)
-            .size(10.0)
+            .size(10.5)
             .color(pal().on_accent)
     } else {
-        RichText::new(text).size(10.0).color(pal().muted)
+        RichText::new(text).size(10.5).color(pal().muted)
     };
 
     let button = egui::Button::new(rich)
@@ -895,7 +898,7 @@ fn tier_pill(ui: &mut egui::Ui, tier: Tier) {
         .rounding(egui::Rounding::same(5.0))
         .inner_margin(egui::Margin::symmetric(5.0, 1.0))
         .show(ui, |ui| {
-            ui.label(RichText::new(tier_label(tier)).size(9.0).color(colour));
+            ui.label(RichText::new(tier_label(tier)).size(9.5).color(colour));
         });
 }
 
@@ -1150,20 +1153,22 @@ fn space_meter(ui: &mut egui::Ui, space: Option<(u64, u64)>) {
     // Fixed size on purpose: a nested layout inside the right-to-left header
     // otherwise inherits no width and wraps one character per line.
     ui.allocate_ui_with_layout(
-        egui::vec2(140.0, 30.0),
-        egui::Layout::top_down(egui::Align::RIGHT),
+        egui::vec2(126.0, 34.0),
+        egui::Layout::top_down(egui::Align::Min),
         |ui| {
+            ui.label(RichText::new("DISK").size(9.5).color(pal().dim));
             ui.label(
                 RichText::new(format!("{:.1} GB free", free as f64 / GB))
-                    .size(10.0)
-                    .color(pal().text),
+                    .size(10.5)
+                    .color(pal().text)
+                    .monospace(),
             );
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(140.0, 4.0), egui::Sense::hover());
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(126.0, 3.0), egui::Sense::hover());
             ui.painter()
-                .rect_filled(rect, 2.0, mix(pal().bg, pal().text, 0.12));
+                .rect_filled(rect, 1.5, mix(pal().bg, pal().text, 0.12));
             let mut filled = rect;
             filled.set_width(rect.width() * ratio.clamp(0.0, 1.0));
-            ui.painter().rect_filled(filled, 2.0, colour);
+            ui.painter().rect_filled(filled, 1.5, colour);
         },
     );
 }
@@ -1291,6 +1296,14 @@ impl eframe::App for App {
         visuals.extreme_bg_color = pal().panel;
         visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, pal().line);
         visuals.override_text_color = Some(pal().text);
+        for widget in [
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+            &mut visuals.widgets.open,
+        ] {
+            widget.rounding = egui::Rounding::same(8.0);
+        }
         ctx.set_visuals(visuals);
 
         egui::TopBottomPanel::top("bar")
@@ -1336,7 +1349,7 @@ impl eframe::App for App {
                             ),
                             None => "native core · nothing scanned yet".to_string(),
                         };
-                        ui.label(RichText::new(subtitle).size(11.0).color(pal().muted).monospace());
+                        ui.label(RichText::new(subtitle).size(11.5).color(pal().muted).monospace());
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1351,7 +1364,7 @@ impl eframe::App for App {
                             RichText::new(label).color(pal().on_accent).strong(),
                         )
                         .fill(pal().accent)
-                        .rounding(egui::Rounding::same(7.0));
+                        .rounding(egui::Rounding::same(8.0));
                         if ui.add_enabled(!self.scanning, button).clicked() {
                             self.start_scan(ctx);
                         }
@@ -1459,43 +1472,50 @@ impl App {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    stat(ui, "folders", &thousands(folders));
-                    stat(ui, "files", &thousands(files));
-                    stat(ui, "size", &bytes(total));
+                let classified: u64 = counts.iter().map(|slot| slot.1).sum();
 
-                    // The tier cells are the shortcut into a filtered Review:
-                    // click pal().keep here and you are looking at what is kept.
-                    let classified: u64 = counts.iter().map(|slot| slot.1).sum();
+                // Eight equal columns: the strip now ends where the map ends.
+                ui.columns(8, |cells| {
+                    cell(&mut cells[0], "FOLDERS", &thousands(folders), pal().muted, false);
+                    cell(&mut cells[1], "FILES", &thousands(files), pal().muted, false);
+                    cell(&mut cells[2], "SIZE", &bytes(total), pal().text, false);
 
-                    for tier in [Tier::SafePurge, Tier::Review, Tier::Keep, Tier::Locked] {
+                    for (index, tier) in [
+                        Tier::SafePurge,
+                        Tier::Review,
+                        Tier::Keep,
+                        Tier::Locked,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
                         let (count, size) = counts[tier_index(tier)];
                         let share = size as f64 / total.max(1) as f64 * 100.0;
+                        let label = if count == 0 {
+                            tier_label(tier).to_string()
+                        } else {
+                            format!("{} {count}", tier_label(tier))
+                        };
                         let value = if count == 0 {
                             "—".to_string()
                         } else {
                             format!("{} · {:.0}%", bytes(size), share)
                         };
-                        if stat_button(
-                            ui,
-                            &format!("{} {count}", tier_label(tier)),
-                            &value,
-                            tier_color(tier),
-                        ) {
+                        if cell(&mut cells[3 + index], &label, &value, tier_color(tier), true) {
                             jump = Some(tier);
                         }
                     }
 
                     // The remainder: folders no rule classified, plus classified
-                    // folders below the 1 MB display threshold. Shown so the row
-                    // always sums to the drive.
+                    // folders below the 1 MB display threshold.
                     let unclassified = total.saturating_sub(classified);
                     let share = unclassified as f64 / total.max(1) as f64 * 100.0;
-                    if stat_button(
-                        ui,
+                    if cell(
+                        &mut cells[7],
                         "UNCLASSIFIED",
                         &format!("{} · {:.0}%", bytes(unclassified), share),
                         pal().dim,
+                        true,
                     ) {
                         open_ai = true;
                     }
@@ -1578,7 +1598,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!("{} of {} folders · {} of {}", visible.len(), thousands(view.folders), bytes(visible.iter().map(|c| c.size).sum::<u64>()), bytes(view.bytes)))
-                    .size(10.0)
+                    .size(10.5)
                     .color(pal().dim),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1673,7 +1693,7 @@ impl App {
                                                     "holds {} protected",
                                                     bytes(candidate.blocked_bytes)
                                                 ))
-                                                .size(10.0)
+                                                .size(10.5)
                                                 .color(pal().review),
                                             );
                                         }
@@ -1777,7 +1797,7 @@ impl App {
                     } else {
                         format!("{} staged · {}", active_count, bytes(total))
                     })
-                    .size(11.0)
+                    .size(11.5)
                     .color(pal().muted),
                 );
             });
@@ -1788,7 +1808,7 @@ impl App {
         if active_count == 0 {
             ui.label(
                 RichText::new("Nothing staged. Quarantine is reversible; purge is not.")
-                    .size(11.0)
+                    .size(11.5)
                     .color(pal().dim),
             );
             return;
@@ -1800,16 +1820,16 @@ impl App {
             .show(ui, |ui| {
                 for item in &self.staged {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("■").size(9.0).color(pal().review));
-                        ui.label(RichText::new(pretty(&item.src)).monospace().size(11.0));
+                        ui.label(RichText::new("■").size(9.5).color(pal().review));
+                        ui.label(RichText::new(pretty(&item.src)).monospace().size(11.5));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 RichText::new(bytes(item.bytes))
                                     .monospace()
-                                    .size(11.0)
+                                    .size(11.5)
                                     .color(pal().muted),
                             );
-                            ui.label(RichText::new(&item.status).size(10.0).color(pal().dim));
+                            ui.label(RichText::new(&item.status).size(10.5).color(pal().dim));
                         });
                     });
                 }
@@ -1861,7 +1881,7 @@ impl App {
                         thousands(progress.files),
                         bytes(progress.bytes)
                     ))
-                    .size(10.0)
+                    .size(10.5)
                     .color(pal().muted)
                     .monospace(),
                 );
@@ -1869,7 +1889,7 @@ impl App {
             if eta > 1.0 {
                 ui.label(
                     RichText::new(format!("~{eta:.0}s left"))
-                        .size(10.0)
+                        .size(10.5)
                         .color(pal().dim)
                         .monospace(),
                 );
@@ -1889,7 +1909,7 @@ impl App {
         if let Some(progress) = &self.progress {
             ui.label(
                 RichText::new(clamp_label(&progress.current, 110))
-                    .size(9.0)
+                    .size(9.5)
                     .color(pal().dim)
                     .monospace(),
             );
@@ -1954,7 +1974,7 @@ impl App {
             ui.label(
                 RichText::new(pretty(&current))
                     .monospace()
-                    .size(11.0)
+                    .size(11.5)
                     .color(pal().muted),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1984,7 +2004,7 @@ impl App {
             .unwrap_or(view.bytes);
 
         let painter = ui.painter_at(canvas);
-        painter.rect_filled(canvas, egui::Rounding::same(6.0), pal().panel);
+        painter.rect_filled(canvas, egui::Rounding::same(8.0), pal().panel);
 
         for visual in &cache.visuals {
             if visual.rect.width() < 1.5 || visual.rect.height() < 1.5 {
@@ -2196,20 +2216,20 @@ impl App {
             if reachable {
                 ui.label(
                     RichText::new(format!("ollama · {} models", self.ai_models.len()))
-                        .size(10.0)
+                        .size(10.5)
                         .color(pal().safe),
                 );
             } else {
                 ui.label(
                     RichText::new("ollama not reachable at 127.0.0.1:11434")
-                        .size(10.0)
+                        .size(10.5)
                         .color(pal().review),
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     RichText::new(format!("{:.1} GB free", ram_free as f64 / 1024f64.powi(3)))
-                        .size(10.0)
+                        .size(10.5)
                         .color(if gate_ok { pal().muted } else { pal().locked }),
                 );
             });
@@ -2220,7 +2240,7 @@ impl App {
         if !reachable {
             ui.label(
                 RichText::new("Start Ollama, then reopen this view.")
-                    .size(11.0)
+                    .size(11.5)
                     .color(pal().dim),
             );
             return;
@@ -2270,7 +2290,7 @@ impl App {
             if !gate_ok {
                 ui.label(
                     RichText::new("needs 1.2 GB free RAM")
-                        .size(10.0)
+                        .size(10.5)
                         .color(pal().locked),
                 );
             } else if self.ai_progress.1 > 0 && self.ai_running {
@@ -2279,7 +2299,7 @@ impl App {
                         "{} of {}",
                         self.ai_progress.0, self.ai_progress.1
                     ))
-                    .size(10.0)
+                    .size(10.5)
                     .color(pal().muted)
                     .monospace(),
                 );
@@ -2326,7 +2346,7 @@ impl App {
                                 ui.label(
                                     RichText::new(pretty(&verdict.path))
                                         .monospace()
-                                        .size(11.0),
+                                        .size(11.5),
                                 );
                                 egui::Frame::none()
                                     .fill(colour.gamma_multiply(0.22))
@@ -2335,13 +2355,13 @@ impl App {
                                     .show(ui, |ui| {
                                         ui.label(
                                             RichText::new(verdict.tier.as_str())
-                                                .size(9.0)
+                                                .size(9.5)
                                                 .color(colour),
                                         );
                                     });
                             });
                             ui.label(
-                                RichText::new(&verdict.reason).size(10.0).color(pal().dim),
+                                RichText::new(&verdict.reason).size(10.5).color(pal().dim),
                             );
                         });
 
@@ -2354,7 +2374,7 @@ impl App {
                                         verdict.confidence * 100.0
                                     ))
                                     .monospace()
-                                    .size(10.0)
+                                    .size(10.5)
                                     .color(pal().muted),
                                 );
                             },
@@ -2493,7 +2513,7 @@ impl App {
                                     node.tier.map(tier_color).unwrap_or(pal().dim),
                                 );
                                 let label =
-                                    RichText::new(last_component(child)).size(11.0).color(pal().text);
+                                    RichText::new(last_component(child)).size(11.5).color(pal().text);
                                 if ui.selectable_label(false, label).clicked() {
                                     go = Some(child.clone());
                                 }
@@ -2513,7 +2533,7 @@ impl App {
                         if children.len() > 200 {
                             ui.label(
                                 RichText::new(format!("+{} more", children.len() - 200))
-                                    .size(10.0)
+                                    .size(10.5)
                                     .color(pal().dim),
                             );
                         }
@@ -2609,21 +2629,21 @@ impl App {
                     RichText::new(
                         "There is no undo after this. Quarantine could be restored; this cannot.",
                     )
-                    .size(11.0)
+                    .size(11.5)
                     .color(pal().locked),
                 );
                 ui.add_space(8.0);
 
                 egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                     for detail in &state.details {
-                        ui.label(RichText::new(pretty(&detail.src)).monospace().size(11.0));
+                        ui.label(RichText::new(pretty(&detail.src)).monospace().size(11.5));
                         ui.label(
                             RichText::new(if detail.truncated {
                                 format!("{}+ files", thousands(detail.file_count))
                             } else {
                                 format!("{} files", thousands(detail.file_count))
                             })
-                            .size(10.0)
+                            .size(10.5)
                             .color(pal().dim),
                         );
                         for (name, size) in &detail.top_files {
@@ -2681,41 +2701,51 @@ impl App {
 
 /// A summary cell that is also a shortcut: clicking it opens Review filtered to
 /// that tier.
-fn stat_button(ui: &mut egui::Ui, label: &str, value: &str, colour: Color32) -> bool {
-    let id = ui.make_persistent_id(("tier-stat", label));
+/// Label above value, used by the inspector's three figures.
+fn stat(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.vertical(|ui| {
+        ui.label(RichText::new(label.to_uppercase()).size(9.5).color(pal().dim));
+        ui.label(RichText::new(value).monospace().size(11.5));
+    });
+    ui.add_space(14.0);
+}
+
+/// One summary cell. Equal width comes from `columns`, not from guessing a
+/// pixel width: the row then shares the map's left and right edges.
+fn cell(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &str,
+    colour: Color32,
+    clickable: bool,
+) -> bool {
+    let id = ui.make_persistent_id(("summary-cell", label));
 
     let inner = ui.allocate_ui_with_layout(
-        egui::vec2(112.0, 32.0),
+        egui::vec2(ui.available_width(), 34.0),
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
-            ui.label(RichText::new(label).size(9.0).color(pal().dim));
+            ui.label(RichText::new(label).size(9.5).color(pal().dim));
             ui.label(RichText::new(value).size(11.5).color(colour).monospace());
         },
     );
+
+    if !clickable {
+        return false;
+    }
 
     let rect = inner.response.rect;
     let response = ui.interact(rect, id, egui::Sense::click());
     if response.hovered() {
         ui.painter().rect_stroke(
-            rect.expand(2.0),
-            egui::Rounding::same(5.0),
+            rect.expand(3.0),
+            egui::Rounding::same(6.0),
             egui::Stroke::new(1.0_f32, pal().line),
         );
     }
 
     response.clicked()
 }
-
-fn stat(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.vertical(|ui| {
-        ui.label(RichText::new(label.to_uppercase()).size(9.0).color(pal().dim));
-        ui.label(RichText::new(value).monospace().size(13.0).strong());
-    });
-    ui.add_space(16.0);
-}
-
-
-
 
 // ------------------------------------------------------------------- selftest
 
