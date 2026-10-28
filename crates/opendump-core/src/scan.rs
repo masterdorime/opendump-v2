@@ -224,14 +224,16 @@ pub fn is_drive_root(path: &str) -> bool {
 /// A drive root becomes one sequential read of the MFT. Anything else - a
 /// subfolder, a non-NTFS volume, or a process without Administrator - falls
 /// back to the directory walk, which always works but takes minutes.
-pub fn scan_any<F>(root: &Path, on_progress: F) -> ScanReport
+pub fn scan_any<F>(root: &Path, mut on_progress: F) -> ScanReport
 where
     F: FnMut(ScanProgress),
 {
     let text = root.to_string_lossy().to_string();
 
     if is_drive_root(&text) {
-        if let Ok((records, _info, skipped, elapsed, _stats)) = crate::mft::read_records(&text) {
+        if let Ok((records, _info, skipped, elapsed, _stats)) =
+            crate::mft::read_records_with(&text, &mut on_progress)
+        {
             let mut report = crate::mft::build_report(&text, &records, elapsed, skipped);
             // The MFT knows the structure but not what a package.json is.
             crate::mft::mark_package_json(&mut report.dirs);

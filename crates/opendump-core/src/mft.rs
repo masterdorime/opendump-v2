@@ -18,7 +18,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::time::Instant;
 
-use crate::scan::{ScanReport, SKIP_NAMES};
+use crate::scan::{ScanProgress, ScanReport, SKIP_NAMES};
 use crate::types::DirEntry;
 
 const MFT_RECORD_MAGIC: u32 = 0x454c_4946; // "FILE"
@@ -515,7 +515,23 @@ pub fn volume_path(volume: &str) -> String {
     format!("\\\\.\\{mount}")
 }
 
-pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u128, ReadStats), String> {
+pub fn read_records(
+    volume: &str,
+) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u128, ReadStats), String> {
+    read_records_with(volume, &mut |_| {})
+}
+
+/// Same read, reporting progress as records come off the table.
+///
+/// The percentage is bytes-discovered against bytes-in-use, the same measure the
+/// walk reports, so the bar means the same thing in both engines.
+pub fn read_records_with<F>(
+    volume: &str,
+    on_progress: &mut F,
+) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u128, ReadStats), String>
+where
+    F: FnMut(ScanProgress),
+{
     let mut stats = ReadStats::default();
     let started = Instant::now();
 
@@ -549,6 +565,9 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
 
     let mut skipped = 0u64;
     let mut record_number = 0u64;
+    let mut seen_dirs = 0u64;
+    let mut seen_files = 0u64;
+    let mut seen_bytes = 0u64;
     let record_size = info.record_size as usize;
     let mut carry: Vec<u8> = Vec::new();
 
@@ -581,6 +600,24 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
             while carry.len() - at >= record_size {
                 let chunk = &carry[at..at + record_size];
                 if let Some(parsed) = parse_record(chunk, info.bytes_per_sector, &mut stats) {
+                    for name in &parsed.names {
+                        if name.is_dir {
+                            seen_dirs += 1;
+                        } else {
+                            seen_files += 1;
+                            seen_bytes += parsed.data_size.unwrap_or(name.size);
+                        }
+                    }
+
+                    if record_number % 100_000 == 0 {
+                        on_progress(ScanProgress {
+                            folders: seen_dirs,
+                            files: seen_files,
+                            bytes: seen_bytes,
+                            current: String::new(),
+                        });
+                    }
+
                     if parsed.base != 0 {
                         // Extension record: its names and sizes belong to the base.
                         if let Some(size) = parsed.data_size {
