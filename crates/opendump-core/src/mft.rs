@@ -37,6 +37,23 @@ pub struct VolumeInfo {
     pub record_size: u64,
 }
 
+/// Where records go missing. Printed by the `--mft` probe so a wrong total can
+/// be diagnosed instead of guessed at.
+#[derive(Debug, Default, Clone)]
+pub struct ReadStats {
+    pub records: u64,
+    pub in_use: u64,
+    pub parsed: u64,
+    pub not_in_use: u64,
+    pub bad_magic: u64,
+    pub bad_fixup: u64,
+    pub attribute_list: u64,
+    pub no_name: u64,
+    pub files: u64,
+    pub dirs: u64,
+    pub bytes_in_records: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRecord {
     pub record: u64,
@@ -115,23 +132,28 @@ pub fn apply_fixup(record: &mut [u8], bytes_per_sector: u64) -> bool {
 /// Returns `None` for records that are free, metadata, or have no usable
 /// file name. Uses `$FILE_NAME`'s logical size, which is what the filesystem
 /// reports for the file — not the on-disk allocation.
-pub fn parse_record(record: &[u8], bytes_per_sector: u64) -> Option<FileRecord> {
+pub fn parse_record(record: &[u8], bytes_per_sector: u64, stats: &mut ReadStats) -> Option<FileRecord> {
+    stats.records += 1;
     if record.len() < 48 {
         return None;
     }
     if u32::from_le_bytes(record[0..4].try_into().ok()?) != MFT_RECORD_MAGIC {
+        stats.bad_magic += 1;
         return None;
     }
 
     let mut buffer = record.to_vec();
     if !apply_fixup(&mut buffer, bytes_per_sector) {
+        stats.bad_fixup += 1;
         return None;
     }
 
     let flags = u16::from_le_bytes([buffer[0x16], buffer[0x17]]);
     if flags & 0x01 == 0 {
+        stats.not_in_use += 1;
         return None; // not in use
     }
+    stats.in_use += 1;
 
     let first_attribute = u16::from_le_bytes([buffer[0x14], buffer[0x15]]) as usize;
     let mut offset = first_attribute;
@@ -149,6 +171,7 @@ pub fn parse_record(record: &[u8], bytes_per_sector: u64) -> Option<FileRecord> 
 
         // Attribute lists mean the record is split; do not guess at the rest.
         if kind == ATTR_ATTRIBUTE_LIST {
+            stats.attribute_list += 1;
             return None;
         }
 
@@ -176,6 +199,19 @@ pub fn parse_record(record: &[u8], bytes_per_sector: u64) -> Option<FileRecord> 
         }
 
         offset += length;
+    }
+
+    match &found {
+        Some(record) => {
+            stats.parsed += 1;
+            stats.bytes_in_records += record.size;
+            if record.is_dir {
+                stats.dirs += 1;
+            } else {
+                stats.files += 1;
+            }
+        }
+        None => stats.no_name += 1,
     }
 
     // The record number is not stored inside the record; the caller assigns it.
@@ -430,7 +466,8 @@ pub fn mft_extents(record_zero: &[u8], bytes_per_sector: u64) -> Vec<Extent> {
 }
 
 /// Read every MFT record from the volume. Requires Administrator.
-pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u128), String> {
+pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u128, ReadStats), String> {
+    let mut stats = ReadStats::default();
     let started = Instant::now();
     // "C:\\" -> "\\.\\C:" ; the colon is part of the device name.
     let mount = volume.trim_end_matches('\\');
@@ -493,7 +530,7 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
             let mut at = 0;
             while carry.len() - at >= record_size {
                 let chunk = &carry[at..at + record_size];
-                if let Some(mut record) = parse_record(chunk, info.bytes_per_sector) {
+                if let Some(mut record) = parse_record(chunk, info.bytes_per_sector, &mut stats) {
                     record.record = record_number;
                     records.push(record);
                 }
@@ -504,7 +541,13 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
         }
     }
 
-    Ok((records, info, skipped, started.elapsed().as_millis()))
+    Ok((
+        records,
+        info,
+        skipped,
+        started.elapsed().as_millis(),
+        stats,
+    ))
 }
 
 /// Fill in `has_package_json` for the folders whose rule needs it.

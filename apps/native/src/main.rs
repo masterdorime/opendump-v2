@@ -2997,7 +2997,7 @@ fn mft_probe() {
     let drive = default_drive();
     println!("reading the MFT of {drive} …");
 
-    let (records, info, skipped, elapsed) = match mft::read_records(&drive) {
+    let (records, info, skipped, elapsed, stats) = match mft::read_records(&drive) {
         Ok(result) => result,
         Err(error) => {
             println!("mft failed: {error}");
@@ -3020,6 +3020,28 @@ fn mft_probe() {
         format!(
             "volume    cluster {} B · record {} B · skipped {}",
             info.bytes_per_cluster, info.record_size, scan.skipped
+        ),
+        format!(
+            "records   in-use {} · parsed {} · not-in-use {}",
+            thousands(stats.in_use), thousands(stats.parsed), thousands(stats.not_in_use)
+        ),
+        format!(
+            "rejects   fixup {} · attr-list {} · no-name {} · bad-magic {}",
+            thousands(stats.bad_fixup),
+            thousands(stats.attribute_list),
+            thousands(stats.no_name),
+            thousands(stats.bad_magic)
+        ),
+        format!(
+            "seen      dirs {} · files {} · bytes {}",
+            thousands(stats.dirs),
+            thousands(stats.files),
+            bytes(stats.bytes_in_records)
+        ),
+        format!(
+            "reachable {} of {} dirs",
+            thousands(folders),
+            thousands(stats.dirs)
         ),
     ];
 
