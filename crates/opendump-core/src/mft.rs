@@ -228,11 +228,17 @@ pub fn parse_record(
                 let non_resident = buffer[offset + 8] != 0;
                 if non_resident {
                     if offset + 0x38 <= buffer.len() {
-                        parsed.data_size = Some(u64::from_le_bytes(
+                        let allocated = u64::from_le_bytes(
+                            buffer[offset + 0x28..offset + 0x30]
+                                .try_into()
+                                .unwrap_or([0; 8]),
+                        );
+                        let real = u64::from_le_bytes(
                             buffer[offset + 0x30..offset + 0x38]
                                 .try_into()
                                 .unwrap_or([0; 8]),
-                        ));
+                        );
+                        parsed.data_size = Some(if real > 0 { real } else { allocated });
                     }
                 } else {
                     parsed.data_size = Some(
@@ -537,6 +543,7 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
 
     let mut records: Vec<FileRecord> = Vec::new();
     let mut extensions: HashMap<u64, Vec<NameAttr>> = HashMap::new();
+    let mut ext_data: HashMap<u64, u64> = HashMap::new();
     let mut nameless: HashMap<u64, Option<u64>> = HashMap::new();
     let mut produced: std::collections::HashSet<u64> = std::collections::HashSet::new();
 
@@ -575,7 +582,12 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
                 let chunk = &carry[at..at + record_size];
                 if let Some(parsed) = parse_record(chunk, info.bytes_per_sector, &mut stats) {
                     if parsed.base != 0 {
-                        // Extension record: its names belong to the base record.
+                        // Extension record: its names and sizes belong to the base.
+                        if let Some(size) = parsed.data_size {
+                            if size > 0 {
+                                ext_data.insert(parsed.base, size);
+                            }
+                        }
                         if !parsed.names.is_empty() {
                             extensions
                                 .entry(parsed.base)
@@ -634,6 +646,17 @@ pub fn read_records(volume: &str) -> Result<(Vec<FileRecord>, VolumeInfo, u64, u
             });
         }
         produced.insert(base);
+    }
+
+    // pagefile.sys and hiberfil.sys keep their $DATA in an extension record, so
+    // they arrive here with no size at all.
+    for record in records.iter_mut() {
+        if record.is_dir || record.size > 0 {
+            continue;
+        }
+        if let Some(size) = ext_data.get(&record.record) {
+            record.size = *size;
+        }
     }
 
     stats.parsed = records.len() as u64;
