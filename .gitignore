@@ -2,3 +2,6 @@ target/
 *.log
 .cache/
 .superpowers/
+
+# graphify knowledge graph - generated, rebuild with /graphify .
+graphify-out/
