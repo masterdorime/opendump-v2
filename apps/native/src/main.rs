@@ -1508,6 +1508,9 @@ impl eframe::App for App {
                 .show(ctx, |ui| self.inspector(ui, ctx));
         }
 
+        // Her band, before the central panel so content is laid out around it.
+        self.dock(ctx);
+
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(pal().bg).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
             .show(ctx, |ui| {
@@ -1540,7 +1543,7 @@ impl eframe::App for App {
         }
 
         // Last, so she sits above every panel.
-        self.draw_mascot(ctx);
+        
     }
 }
 
@@ -2513,52 +2516,48 @@ impl App {
     /// Editing here writes overrides.json; the compiled set is rebuilt on the
     /// next scan, so the banner tells the user to rescan rather than pretending
     /// the change is live.
-    /// Sumi, painted over the window in the bottom-right corner.
-    ///
-    /// Painted rather than allocated: she must never take a click meant for a
-    /// tile or a row. She is also absent while the purge confirmation is open —
-    /// a cheerful character beside an irreversible action reads as endorsement.
-    fn draw_mascot(&mut self, ctx: &egui::Context) {
-        if self.confirm.is_some() {
-            return;
-        }
-
+    /// The mascot's own band. A real panel, so content shrinks around it
+    /// instead of being covered — the corner overlay always won that fight.
+    fn dock(&mut self, ctx: &egui::Context) {
         let height = self
             .mascot_preview
-            .unwrap_or(if self.scan.is_none() { 220.0 } else { 160.0 });
+            .unwrap_or(if self.scan.is_none() || self.scanning { 132.0 } else { 72.0 });
+        egui::TopBottomPanel::bottom("dock")
+            .exact_height(height)
+            .frame(
+                egui::Frame::none()
+                    .fill(pal().panel)
+                    .inner_margin(egui::Margin::symmetric(16.0, 3.0)),
+            )
+            .show(ctx, |ui| {
+                let rect = ui.max_rect();
+                let art_height = (rect.height() - 4.0).max(24.0);
+                let art_width = art_height * SUMI_W as f32 / SUMI_H as f32;
+                let art = egui::Rect::from_min_size(
+                    egui::pos2(rect.right() - art_width, rect.bottom() - art_height),
+                    egui::vec2(art_width, art_height),
+                );
+                self.paint_mascot(ui.painter(), art);
 
-        let screen = ctx.screen_rect();
-        // The inspector owns the window's bottom-right corner and has buttons in
-        // it. When it is open, the slot anchors to the map's right edge instead.
-        let inspector = if self.pane == Pane::Map && self.scan.is_some() {
-            304.0
-        } else {
-            0.0
-        };
-        let width = height * SUMI_W as f32 / SUMI_H as f32;
-        // Only the artwork leans off the edge. A labelled slot must be fully
-        // readable, so it sits inside the content area.
-        let overhang = if self.mascot_image { width * 0.12 } else { 0.0 };
-        let map_right = screen.right() - inspector;
-        let rect = egui::Rect::from_min_size(
-            egui::pos2(
-                map_right - width + overhang,
-                screen.bottom() - 30.0 - height,
-            ),
-            egui::vec2(width, height),
-        );
-        // The clip keeps the overhang from painting across the inspector; the
-        // foreground layer alone would draw straight over its buttons.
-        let painter = ctx
-            .layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::new("sumi"),
-            ))
-            .with_clip_rect(egui::Rect::from_min_max(
-                screen.min,
-                egui::pos2(map_right, screen.bottom()),
-            ));
+                let line = if self.scanning {
+                    "Reading the drive\u{2026}".to_string()
+                } else if self.scan.is_none() {
+                    "Nothing yet. I'll wait.".to_string()
+                } else {
+                    "Counted. Twice.".to_string()
+                };
+                ui.painter().text(
+                    egui::pos2(rect.left() + 2.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    line,
+                    egui::FontId::proportional(12.0),
+                    pal().muted,
+                );
+            });
+    }
 
+    /// Art or placeholder, inside a rect somebody else reserved.
+    fn paint_mascot(&self, painter: &egui::Painter, rect: egui::Rect) {
         if self.mascot_image {
             if let Some(texture) = self.sumi.as_ref().map(|handle| handle.id()) {
                 painter.image(
@@ -2567,37 +2566,40 @@ impl App {
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+                return;
             }
+        }
+        let fill = Color32::from_rgba_unmultiplied(
+            pal().panel.r(),
+            pal().panel.g(),
+            pal().panel.b(),
+            236,
+        );
+        painter.rect_filled(rect, 6.0, fill);
+        painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, pal().muted));
+        let (label, size) = if rect.height() < 110.0 {
+            ("mascot".to_string(), 9.5)
         } else {
-            // A reserved slot, not a character: dashed-ish frame, readable fill.
-            let fill = Color32::from_rgba_unmultiplied(
-                pal().panel.r(),
-                pal().panel.g(),
-                pal().panel.b(),
-                236,
-            );
-            painter.rect_filled(rect, 8.0, fill);
-            painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.0_f32, pal().muted));
-            let label = format!(
-                "This is where\nthe mascot will appear\n\n{:.0} x {:.0} px",
-                width, height
-            );
-            let galley = painter.layout(
-                label,
-                egui::FontId::proportional(10.5),
-                pal().muted,
-                rect.width() - 12.0,
-            );
-            painter.galley(
-                rect.center() - galley.size() / 2.0,
-                galley,
-                pal().muted,
-            );
-        }
-
-        if self.mascot_preview.is_some() {
-            ctx.request_repaint();
-        }
+            (
+                format!(
+                    "This is where\nthe mascot will appear\n\n{:.0} x {:.0} px",
+                    rect.width(),
+                    rect.height()
+                ),
+                10.5,
+            )
+        };
+        let galley = painter.layout(
+            label,
+            egui::FontId::proportional(size),
+            pal().muted,
+            rect.width() - 8.0,
+        );
+        painter.galley(
+            rect.center() - galley.size() / 2.0,
+            galley,
+            pal().muted,
+        );
     }
 
     fn rules_pane(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {

@@ -107,9 +107,10 @@ cargo run --release -- --pane quarantine            # open any pane directly
 cargo run --release -- --mascot-image               # draw the baked art instead of the slot
 ```
 
-The mascot slot is painted, never allocated, so it takes no clicks; it is suppressed while the
-purge confirmation is open, and it anchors to the map's right edge so it cannot cover the
-inspector's buttons. The artwork is a placeholder cut from a reference image and is **not**
+The mascot lives in a bottom **dock** — a real `TopBottomPanel`, 72 pt tall, so every pane is laid
+out *around* it and nothing is covered. `--mascot <px>` grows the dock for review. A floating corner
+overlay was built first and deleted: at any size it covered either the inspector's buttons or two
+and a half review rows. The artwork is a placeholder cut from a reference image and is **not**
 shippable — `mascotdesign.md` holds the real spec.
 
 User data: `%APPDATA%\opendump-native\` — `journal.jsonl`, `quarantine\<batch>\…`. Deliberately

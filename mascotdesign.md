@@ -24,12 +24,12 @@ These are safety rules, not style preferences. A change that breaks one is a reg
 
 | # | Rule | Reason |
 |---|---|---|
-| 1 | **She is absent from the purge confirmation.** Not dimmed behind it — not drawn. | A cute character beside "delete 12.4 GB permanently" reads as endorsement of an irreversible act. |
-| 2 | **She never overlaps a review row, treemap tile, or button.** | She is decoration; the data is the product. |
-| 3 | **She never receives clicks.** | She sits over the map. An interactive mascot eats clicks meant for tiles. |
+| 1 | **She is never drawn over data.** She has a dock, not an overlay. | A corner overlay covered the inspector's buttons and review rows at every size tried. |
+| 2 | **She goes still during the purge confirmation.** No motion, no copy, no celebration. | A cheerful character beside "delete 12.4 GB permanently" reads as endorsement of an irreversible act. |
+| 3 | **She never receives clicks.** | The dock is layout, not a control. |
 | 4 | **She carries no information that exists nowhere else.** No tier colour, no byte count, no state is readable only from her. | Decorative assets must not be an accessibility dependency. |
 | 5 | **She can be turned off in one click, and the choice persists.** | Motion and character art are not for everyone. |
-| 6 | **No text baked into the artwork.** | Text dies at 72 px and cannot be translated. |
+| 6 | **No text baked into the artwork.** | Text dies at 62 px and cannot be translated. |
 
 ## 3. Character
 
@@ -100,15 +100,14 @@ mouth is two pixels.
 
 `MascotMode` is derived, never stored:
 
-| Window state | Mode | Size | Pose |
+| Window state | Dock | Art height | Pose |
 |---|---|---|---|
-| No scan in memory | `Full` | 180 px | `idle` / `asleep` after 60 s |
-| Scan running | `Full` | 180 px | `squint` |
-| Scan just finished (≤ 2 s) | `Full` | 180 px | `stamp` |
-| Scan present, Review or Map active | `Peek` | 72 px | `idle` |
-| Quarantine pane active | `Peek` | 72 px | `empty_hands` |
-| **Purge confirmation open** | `Hidden` | — | — |
-| User toggled her off | `Hidden` | — | — |
+| No scan in memory | **132 pt** | 120 px | `idle` / `asleep` after 60 s |
+| Scan running | **132 pt** | 120 px | `squint` |
+| Scan just finished (≤ 2 s) | 72 pt | 62 px | `stamp` |
+| Scan present, any pane | 72 pt | 62 px | `idle` |
+| **Purge confirmation open** | 72 pt | 62 px | still, no motion, no copy |
+| User toggled her off | 0 pt | — | — |
 
 ### 4.2 Copy
 
@@ -141,24 +140,41 @@ No motion when `Hidden`. No motion at all under reduced-motion (see §8).
 
 ## 5. Placement
 
-### 5.1 Full, 180 px
+**She has a band, not a corner.** A floating overlay in the bottom-right was built and removed: it
+always covered either the inspector's buttons (Open / Reveal / Quarantine) or two and a half review
+rows, at every size from 72 to 300 px. The window's bottom-right corner is data, not margin.
 
-Inside the empty/summary panel, left of centre, baseline on the panel's bottom padding. She sits in
-**reserved rect space**, so no existing widget moves and nothing overlaps. The copy line sits to her
-right, top-aligned with her shoulder.
+### 5.1 The dock
 
-### 5.2 Peek, 72 px
+A real `TopBottomPanel::bottom("dock")`, 72 pt tall, full width, `pal().panel` fill. It is layout,
+not overlay: every pane is laid out above it, so nothing can be covered.
 
-Bottom-right, **clipped by the window edge**: roughly 40 % of her width is off-frame, so she reads as
-leaning in rather than pasted on. Bottom margin 12 px, above the status bar. Drawn last, painted
-only, no `Area`, no `Sense`.
+- **Left:** her one line of copy (§4.2), 12 pt, muted, left-aligned and vertically centred.
+- **Right:** her art, ~62 px tall, bottom-aligned — she reads as standing in the band.
+- **Cost:** 72 pt of height, about 1.5 review rows, on a 820 pt window. At the 600 pt minimum window
+  the dock drops to 56 pt and she is cropped to the head.
+- **No interaction:** the dock takes no `Sense`; clicks pass to the panel behind it.
+
+### 5.2 Growth
+
+The dock is the only thing that changes size, and only in two states:
+
+| State | Dock | Art |
+|---|---|---|
+| No scan yet / scanning | **132 pt** | 120 pt, full head and shoulders |
+| Everything else | 72 pt | 62 pt, head and shoulders |
+| `--mascot <px>` | that height | clamped to the dock |
+
+Content shifts by 60 pt when a scan starts. That is acceptable because the scan itself already
+replaces the whole central pane.
 
 ### 5.3 Never
 
-- Inside the purge confirmation card, or visible while it is open.
-- Over the review list, the treemap, the inspector, or any button.
-- On the treemap's right edge, where the inspector scrolls.
-- Outside the window's clip rect (no drawing past the frame).
+- Over the review list, the treemap, the inspector, or any button — the dock makes this structural.
+- As a floating overlay above the content, at any size. That decision is settled; do not re-open it
+  without a screenshot of Review and Rules.
+- Spoken or animated during the purge confirmation. The dock stays put and she goes still; the card
+  owns the screen.
 
 ### 5.4 Light and dark
 
