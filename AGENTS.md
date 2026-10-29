@@ -30,7 +30,7 @@ clean · CI green.
 | Version | 0.1.0, **released 2026-10-29** (`v0.1.0`, unsigned windows-x64 zip) |
 | Tests | **73** (`cargo test --workspace`) |
 | Lines | **7,865** Rust |
-| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.93 MB |
+| Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 6.93 MB (7.25 MB with the mascot placeholder) |
 | Measured | full `C:\` scan **4.9 s** via the MFT, **75 s** via the walk; **~95 MB** idle, **~130 MB** with a full map drawn |
 
 The window has five views (Map / Review / Quarantine / AI / Rules), a nested treemap with
@@ -100,7 +100,17 @@ cargo run --release              # opens empty
 cargo run --release -- --scan    # scanning on open
 cargo run --release -- --selftest  # headless scan + classify + print
 cargo run --release -- --probe     # RAM/VRAM only, no scan (fast), no window
+
+# mascot placeholder (temporary; see mascotdesign.md in this repo)
+cargo run --release -- --mascot 200 --pane review   # labelled slot, 200 pt tall
+cargo run --release -- --pane quarantine            # open any pane directly
+cargo run --release -- --mascot-image               # draw the baked art instead of the slot
 ```
+
+The mascot slot is painted, never allocated, so it takes no clicks; it is suppressed while the
+purge confirmation is open, and it anchors to the map's right edge so it cannot cover the
+inspector's buttons. The artwork is a placeholder cut from a reference image and is **not**
+shippable — `mascotdesign.md` holds the real spec.
 
 User data: `%APPDATA%\opendump-native\` — `journal.jsonl`, `quarantine\<batch>\…`. Deliberately
 separate from v1's `%APPDATA%\opendump`.

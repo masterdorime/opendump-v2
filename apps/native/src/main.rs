@@ -30,6 +30,12 @@ const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../.
 const LOGO_RGBA: &[u8] = include_bytes!("../assets/logo64.rgba");
 const LOGO_SIDE: usize = 64;
 
+/// Sumi, the placeholder mascot. Raw RGBA, same pipeline as the logo: no
+/// decoder, no dependency, baked into the exe.
+const SUMI_RGBA: &[u8] = include_bytes!("../assets/sumi240x315.rgba");
+const SUMI_W: usize = 240;
+const SUMI_H: usize = 315;
+
 // ------------------------------------------------------------------- palette
 
 const INK: Color32 = Color32::from_rgb(0x12, 0x08, 0x0a);
@@ -413,6 +419,12 @@ struct App {
     map_colour: MapColour,
     search: String,
     logo: Option<egui::TextureHandle>,
+    /// Sumi placeholder texture; `None` until the first frame.
+    sumi: Option<egui::TextureHandle>,
+    /// `Some(size)` when `--mascot <px>` pins the preview size.
+    mascot_preview: Option<f32>,
+    /// `--mascot-image` swaps the placeholder box for the real texture.
+    mascot_image: bool,
 }
 
 impl App {
@@ -452,6 +464,9 @@ impl App {
             map_colour: MapColour::Status,
             search: String::new(),
             logo: None,
+            sumi: None,
+            mascot_preview: None,
+            mascot_image: false,
         };
 
         // Open to the last map when the cache was written by these rules.
@@ -1523,6 +1538,9 @@ impl eframe::App for App {
                 self.toast = None;
             }
         }
+
+        // Last, so she sits above every panel.
+        self.draw_mascot(ctx);
     }
 }
 
@@ -2495,6 +2513,93 @@ impl App {
     /// Editing here writes overrides.json; the compiled set is rebuilt on the
     /// next scan, so the banner tells the user to rescan rather than pretending
     /// the change is live.
+    /// Sumi, painted over the window in the bottom-right corner.
+    ///
+    /// Painted rather than allocated: she must never take a click meant for a
+    /// tile or a row. She is also absent while the purge confirmation is open —
+    /// a cheerful character beside an irreversible action reads as endorsement.
+    fn draw_mascot(&mut self, ctx: &egui::Context) {
+        if self.confirm.is_some() {
+            return;
+        }
+
+        let height = self
+            .mascot_preview
+            .unwrap_or(if self.scan.is_none() { 220.0 } else { 160.0 });
+
+        let screen = ctx.screen_rect();
+        // The inspector owns the window's bottom-right corner and has buttons in
+        // it. When it is open, the slot anchors to the map's right edge instead.
+        let inspector = if self.pane == Pane::Map && self.scan.is_some() {
+            304.0
+        } else {
+            0.0
+        };
+        let width = height * SUMI_W as f32 / SUMI_H as f32;
+        // Only the artwork leans off the edge. A labelled slot must be fully
+        // readable, so it sits inside the content area.
+        let overhang = if self.mascot_image { width * 0.12 } else { 0.0 };
+        let map_right = screen.right() - inspector;
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(
+                map_right - width + overhang,
+                screen.bottom() - 30.0 - height,
+            ),
+            egui::vec2(width, height),
+        );
+        // The clip keeps the overhang from painting across the inspector; the
+        // foreground layer alone would draw straight over its buttons.
+        let painter = ctx
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("sumi"),
+            ))
+            .with_clip_rect(egui::Rect::from_min_max(
+                screen.min,
+                egui::pos2(map_right, screen.bottom()),
+            ));
+
+        if self.mascot_image {
+            if let Some(texture) = self.sumi.as_ref().map(|handle| handle.id()) {
+                painter.image(
+                    texture,
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
+        } else {
+            // A reserved slot, not a character: dashed-ish frame, readable fill.
+            let fill = Color32::from_rgba_unmultiplied(
+                pal().panel.r(),
+                pal().panel.g(),
+                pal().panel.b(),
+                236,
+            );
+            painter.rect_filled(rect, 8.0, fill);
+            painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.0_f32, pal().muted));
+            let label = format!(
+                "This is where\nthe mascot will appear\n\n{:.0} x {:.0} px",
+                width, height
+            );
+            let galley = painter.layout(
+                label,
+                egui::FontId::proportional(10.5),
+                pal().muted,
+                rect.width() - 12.0,
+            );
+            painter.galley(
+                rect.center() - galley.size() / 2.0,
+                galley,
+                pal().muted,
+            );
+        }
+
+        if self.mascot_preview.is_some() {
+            ctx.request_repaint();
+        }
+    }
+
     fn rules_pane(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let compiled = rules();
 
@@ -3449,6 +3554,22 @@ fn main() -> eframe::Result<()> {
     let (sender, receiver) = channel();
     let mut app = App::new(sender, receiver);
     let autoscan = std::env::args().any(|arg| arg == "--scan");
+    let argv: Vec<String> = std::env::args().collect();
+    if let Some(index) = argv.iter().position(|arg| arg == "--mascot") {
+        if let Some(size) = argv.get(index + 1).and_then(|value| value.parse::<f32>().ok()) {
+            app.mascot_preview = Some(size.clamp(48.0, 480.0));
+        }
+    }
+    app.mascot_image = argv.iter().any(|arg| arg == "--mascot-image");
+    if let Some(index) = argv.iter().position(|arg| arg == "--pane") {
+        app.pane = match argv.get(index + 1).map(|value| value.as_str()) {
+            Some("review") => Pane::Review,
+            Some("quarantine") => Pane::Quarantine,
+            Some("ai") => Pane::Ai,
+            Some("rules") => Pane::Rules,
+            _ => Pane::Map,
+        };
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -3472,6 +3593,11 @@ fn main() -> eframe::Result<()> {
             app.logo = Some(cc.egui_ctx.load_texture(
                 "logo",
                 egui::ColorImage::from_rgba_unmultiplied([LOGO_SIDE, LOGO_SIDE], LOGO_RGBA),
+                egui::TextureOptions::LINEAR,
+            ));
+            app.sumi = Some(cc.egui_ctx.load_texture(
+                "sumi",
+                egui::ColorImage::from_rgba_unmultiplied([SUMI_W, SUMI_H], SUMI_RGBA),
                 egui::TextureOptions::LINEAR,
             ));
             if autoscan {
