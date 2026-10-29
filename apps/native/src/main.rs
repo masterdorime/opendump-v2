@@ -1431,7 +1431,14 @@ impl eframe::App for App {
                     }
                     ui.add_space(6.0);
                     ui.vertical(|ui| {
-                        ui.label(RichText::new("opendump").strong().size(13.5));
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("opendump").strong().size(13.5));
+                            ui.label(
+                                RichText::new("Local Drive Auditor")
+                                    .size(9.5)
+                                    .color(pal().dim),
+                            );
+                        });
                         let subtitle = match &self.scan {
                             Some(view) => format!(
                                 "{} · {} folders · {} · scanned {} ({:.0}s)",
@@ -1496,7 +1503,7 @@ impl eframe::App for App {
                 }
             });
 
-        if self.pane == Pane::Map && self.scan.is_some() {
+        if self.scan.is_some() {
             egui::SidePanel::right("inspector")
                 .exact_width(304.0)
                 .resizable(false)
@@ -1508,16 +1515,14 @@ impl eframe::App for App {
                 .show(ctx, |ui| self.inspector(ui, ctx));
         }
 
-        // Her band, before the central panel so content is laid out around it.
-        self.dock(ctx);
+        // Navigation is the sidebar now; nothing above the content.
+        self.sidebar(ctx);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(pal().bg).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
             .show(ctx, |ui| {
                 self.summary(ui);
                 ui.add_space(10.0);
-                self.tabs(ui);
-                ui.add_space(6.0);
                 match self.pane {
                     Pane::Map => self.map(ui),
                     Pane::Review => self.review(ui, ctx),
@@ -1548,6 +1553,67 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Navigation, once. The tab row it replaces was a second copy of this.
+    fn sidebar(&mut self, ctx: &egui::Context) {
+        let actionable = self
+            .scan
+            .as_ref()
+            .map(|view| view.candidates.len())
+            .unwrap_or(0);
+        let held = self
+            .staged
+            .iter()
+            .filter(|item| item.status == "quarantined")
+            .count();
+
+        egui::SidePanel::left("nav")
+            .exact_width(196.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::none()
+                    .fill(pal().panel)
+                    .inner_margin(egui::Margin::symmetric(10.0, 12.0)),
+            )
+            .show(ctx, |ui| {
+                for (pane, label, count) in [
+                    (Pane::Map, "Map", 0usize),
+                    (Pane::Review, "Review", actionable),
+                    (Pane::Quarantine, "Quarantine", held),
+                ] {
+                    if nav_item(ui, self.pane == pane, label, count) {
+                        self.pane = pane;
+                    }
+                    ui.add_space(4.0);
+                }
+
+                ui.add_space(14.0);
+                ui.label(RichText::new("TOOLS").size(9.0).color(pal().dim));
+                ui.add_space(6.0);
+                for (pane, label, count) in [
+                    (Pane::Ai, "Local AI", self.ai_results.len()),
+                    (Pane::Rules, "Rules", self.disabled_rules.len()),
+                ] {
+                    if nav_item(ui, self.pane == pane, label, count) {
+                        self.pane = pane;
+                    }
+                    ui.add_space(4.0);
+                }
+
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.label(
+                        RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                            .size(9.5)
+                            .color(pal().dim),
+                    );
+                    ui.label(
+                        RichText::new("Less clutter. More space.")
+                            .size(9.5)
+                            .color(pal().dim),
+                    );
+                });
+            });
+    }
+
     fn summary(&mut self, ui: &mut egui::Ui) {
         let Some(view) = &self.scan else {
             ui.label(RichText::new("Scan the drive to see what can be removed.").color(pal().muted));
@@ -1561,68 +1627,58 @@ impl App {
             slot.1 += candidate.size;
         }
 
-        let folders = view.folders;
         let files = view.files;
         let total = view.bytes;
 
         let mut jump: Option<Tier> = None;
         let mut open_ai = false;
 
-        egui::Frame::none()
-            .fill(pal().panel)
-            .stroke(egui::Stroke::new(1.0_f32, pal().line))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::symmetric(14.0, 10.0))
-            .show(ui, |ui| {
-                let classified: u64 = counts.iter().map(|slot| slot.1).sum();
+        let classified: u64 = counts.iter().map(|slot| slot.1).sum();
 
-                // Eight equal columns: the strip now ends where the map ends.
-                ui.columns(8, |cells| {
-                    cell(&mut cells[0], "FOLDERS", &thousands(folders), pal().muted, false);
-                    cell(&mut cells[1], "FILES", &thousands(files), pal().muted, false);
-                    cell(&mut cells[2], "SIZE", &bytes(total), pal().text, false);
-
-                    for (index, tier) in [
-                        Tier::SafePurge,
-                        Tier::Review,
-                        Tier::Keep,
-                        Tier::Locked,
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        let (count, size) = counts[tier_index(tier)];
-                        let share = size as f64 / total.max(1) as f64 * 100.0;
-                        let label = if count == 0 {
-                            tier_label(tier).to_string()
-                        } else {
-                            format!("{} {count}", tier_label(tier))
-                        };
-                        let value = if count == 0 {
-                            "—".to_string()
-                        } else {
-                            format!("{} · {:.0}%", bytes(size), share)
-                        };
-                        if cell(&mut cells[3 + index], &label, &value, tier_color(tier), true) {
-                            jump = Some(tier);
-                        }
-                    }
-
-                    // The remainder: folders no rule classified, plus classified
-                    // folders below the 1 MB display threshold.
-                    let unclassified = total.saturating_sub(classified);
-                    let share = unclassified as f64 / total.max(1) as f64 * 100.0;
-                    if cell(
-                        &mut cells[7],
-                        "UNCLASSIFIED",
-                        &format!("{} · {:.0}%", bytes(unclassified), share),
-                        pal().dim,
-                        true,
-                    ) {
-                        open_ai = true;
-                    }
-                });
-            });
+        ui.columns(6, |cells| {
+            summary_card(
+                &mut cells[0],
+                "TOTAL SCANNED",
+                &bytes(total),
+                &format!("{:.1} M files", files as f64 / 1_000_000.0),
+                pal().muted,
+            );
+            for (index, tier) in [
+                Tier::SafePurge,
+                Tier::Review,
+                Tier::Keep,
+                Tier::Locked,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let (count, size) = counts[tier_index(tier)];
+                let share = size as f64 / total.max(1) as f64 * 100.0;
+                let sub = format!("{count} folders · {share:.0}%");
+                if summary_card(
+                    &mut cells[1 + index],
+                    tier_label(tier),
+                    &bytes(size),
+                    &sub,
+                    tier_color(tier),
+                ) {
+                    jump = Some(tier);
+                }
+            }
+            // The remainder: folders no rule classified, plus classified folders
+            // below the 1 MB display threshold.
+            let unclassified = total.saturating_sub(classified);
+            let share = unclassified as f64 / total.max(1) as f64 * 100.0;
+            if summary_card(
+                &mut cells[5],
+                "UNCLASSIFIED",
+                &bytes(unclassified),
+                &format!("{share:.0}% · no rule"),
+                pal().dim,
+            ) {
+                open_ai = true;
+            }
+        });
 
         if let Some(tier) = jump {
             self.filter = Some(tier);
@@ -2015,44 +2071,6 @@ impl App {
                     .monospace(),
             );
         }
-    }
-
-    fn tabs(&mut self, ui: &mut egui::Ui) {
-        let actionable = self
-            .scan
-            .as_ref()
-            .map(|view| view.candidates.len())
-            .unwrap_or(0);
-        let held = self
-            .staged
-            .iter()
-            .filter(|item| item.status == "quarantined")
-            .count();
-
-        let tabs = [
-            (Pane::Map, "MAP", 0usize),
-            (Pane::Review, "REVIEW", actionable),
-            (Pane::Quarantine, "QUARANTINE", held),
-            (Pane::Ai, "AI", self.ai_results.len()),
-            (Pane::Rules, "RULES", self.disabled_rules.len()),
-        ];
-
-        ui.horizontal(|ui| {
-            for (pane, label, count) in tabs {
-                let active = self.pane == pane;
-                let text = if count > 0 {
-                    format!("{label}  {count}")
-                } else {
-                    label.to_string()
-                };
-                let rich = RichText::new(text)
-                    .size(10.5)
-                    .color(if active { pal().text } else { pal().muted });
-                if ui.selectable_label(active, rich).clicked() {
-                    self.pane = pane;
-                }
-            }
-        });
     }
 
     /// The treemap: area is bytes, colour is safety, click zooms.
@@ -2518,44 +2536,6 @@ impl App {
     /// the change is live.
     /// The mascot's own band. A real panel, so content shrinks around it
     /// instead of being covered — the corner overlay always won that fight.
-    fn dock(&mut self, ctx: &egui::Context) {
-        let height = self
-            .mascot_preview
-            .unwrap_or(if self.scan.is_none() || self.scanning { 132.0 } else { 72.0 });
-        egui::TopBottomPanel::bottom("dock")
-            .exact_height(height)
-            .frame(
-                egui::Frame::none()
-                    .fill(pal().panel)
-                    .inner_margin(egui::Margin::symmetric(16.0, 3.0)),
-            )
-            .show(ctx, |ui| {
-                let rect = ui.max_rect();
-                let art_height = (rect.height() - 4.0).max(24.0);
-                let art_width = art_height * SUMI_W as f32 / SUMI_H as f32;
-                let art = egui::Rect::from_min_size(
-                    egui::pos2(rect.right() - art_width, rect.bottom() - art_height),
-                    egui::vec2(art_width, art_height),
-                );
-                self.paint_mascot(ui.painter(), art);
-
-                let line = if self.scanning {
-                    "Reading the drive\u{2026}".to_string()
-                } else if self.scan.is_none() {
-                    "Nothing yet. I'll wait.".to_string()
-                } else {
-                    "Counted. Twice.".to_string()
-                };
-                ui.painter().text(
-                    egui::pos2(rect.left() + 2.0, rect.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    line,
-                    egui::FontId::proportional(12.0),
-                    pal().muted,
-                );
-            });
-    }
-
     /// Art or placeholder, inside a rect somebody else reserved.
     fn paint_mascot(&self, painter: &egui::Painter, rect: egui::Rect) {
         if self.mascot_image {
@@ -2929,7 +2909,7 @@ impl App {
         ui.label(RichText::new("SUMI \u{00b7} DRIVE GUIDE").size(9.5).color(pal().dim));
         ui.add_space(4.0);
         ui.horizontal_top(|ui| {
-            let portrait = 82.0;
+            let portrait = self.mascot_preview.unwrap_or(72.0);
             let text_width = (ui.available_width() - portrait - 12.0).max(80.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(text_width, 0.0),
@@ -3243,38 +3223,94 @@ fn draw_inspection(ui: &mut egui::Ui, detail: &FolderDetail) {
 
 /// One summary cell. Equal width comes from `columns`, not from guessing a
 /// pixel width: the row then shares the map's left and right edges.
-fn cell(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &str,
-    colour: Color32,
-    clickable: bool,
-) -> bool {
-    let id = ui.make_persistent_id(("summary-cell", label));
-
-    let inner = ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), 34.0),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| {
-            ui.label(RichText::new(label).size(9.5).color(pal().dim));
-            ui.label(RichText::new(value).size(11.5).color(colour).monospace());
-        },
+fn summary_card(ui: &mut egui::Ui, label: &str, value: &str, sub: &str, colour: Color32) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 76.0), egui::Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 8.0, pal().panel);
+    painter.rect_stroke(
+        rect,
+        8.0,
+        egui::Stroke::new(
+            1.0_f32,
+            if response.hovered() {
+                mix(colour, pal().line, 0.35)
+            } else {
+                pal().line
+            },
+        ),
     );
+    let dot = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 12.0, rect.top() + 15.0),
+        egui::vec2(8.0, 8.0),
+    );
+    painter.rect_filled(dot, 2.0, colour);
+    painter.text(
+        egui::pos2(rect.left() + 26.0, rect.top() + 19.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(9.0),
+        pal().dim,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 12.0, rect.top() + 40.0),
+        egui::Align2::LEFT_CENTER,
+        value,
+        egui::FontId::proportional(17.0),
+        pal().text,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 12.0, rect.top() + 60.0),
+        egui::Align2::LEFT_CENTER,
+        sub,
+        egui::FontId::proportional(9.5),
+        pal().muted,
+    );
+    response.clicked()
+}
 
-    if !clickable {
-        return false;
-    }
-
-    let rect = inner.response.rect;
-    let response = ui.interact(rect, id, egui::Sense::click());
-    if response.hovered() {
-        ui.painter().rect_stroke(
-            rect.expand(3.0),
-            egui::Rounding::same(6.0),
-            egui::Stroke::new(1.0_f32, pal().line),
+fn nav_item(ui: &mut egui::Ui, active: bool, label: &str, count: usize) -> bool {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 38.0),
+        egui::Sense::click(),
+    );
+    let painter = ui.painter();
+    let fill = if active {
+        mix(pal().panel, pal().accent, 0.16)
+    } else if response.hovered() {
+        mix(pal().panel, pal().text, 0.06)
+    } else {
+        Color32::TRANSPARENT
+    };
+    painter.rect_filled(rect, 7.0, fill);
+    if active {
+        painter.rect_stroke(
+            rect,
+            7.0,
+            egui::Stroke::new(1.0_f32, mix(pal().accent, pal().panel, 0.45)),
         );
     }
-
+    let dot = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 18.0, rect.center().y),
+        egui::vec2(9.0, 9.0),
+    );
+    painter.rect_filled(dot, 2.0, if active { pal().accent } else { pal().dim });
+    painter.text(
+        egui::pos2(rect.left() + 34.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(12.5),
+        if active { pal().text } else { pal().muted },
+    );
+    if count > 0 {
+        painter.text(
+            egui::pos2(rect.right() - 12.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            count.to_string(),
+            egui::FontId::proportional(10.5),
+            pal().dim,
+        );
+    }
     response.clicked()
 }
 

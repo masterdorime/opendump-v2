@@ -102,17 +102,17 @@ cargo run --release -- --selftest  # headless scan + classify + print
 cargo run --release -- --probe     # RAM/VRAM only, no scan (fast), no window
 
 # mascot placeholder (temporary; see mascotdesign.md in this repo)
-cargo run --release -- --mascot 200 --pane review   # labelled slot, 200 pt tall
-cargo run --release -- --pane quarantine            # open any pane directly
-cargo run --release -- --mascot-image               # draw the baked art instead of the slot
-cargo run --release -- --zoom "C:\...\npm-cache"    # open the inspector on one folder
+cargo run --release -- --mascot 96               # portrait height in the guide card
+cargo run --release -- --pane quarantine         # open any pane directly
+cargo run --release -- --mascot-image            # draw the baked art instead of the slot
+cargo run --release -- --zoom "C:\...\npm-cache" # open the inspector on one folder
 ```
 
-The mascot has two homes, both real layout: the **dock** (`TopBottomPanel::bottom`, 72 pt, grows
-to 132 when there is no scan or a scan is running) and the **guide card** pinned under the
-inspector. The card may only restate the matched rule's tier, size and reason plus one action
-line — same ceiling as the AI, it never invents a verdict. The artwork is a placeholder cut from a
-reference image and is **not** shippable — `mascotdesign.md` holds the real spec.
+Navigation is a **left sidebar** (Map / Review / Quarantine, then Tools: Local AI, Rules); there is
+no tab row. The right rail is always present: it inspects the drive or the zoomed folder and pins
+**Sumi's guide card** at its bottom. She may only restate the matched rule's tier, size and reason
+plus one action line — same ceiling as the AI, she never invents a verdict. The artwork is a
+placeholder cut from a reference image and is **not** shippable — `mascotdesign.md` holds the spec.
 
 User data: `%APPDATA%\opendump-native\` — `journal.jsonl`, `quarantine\<batch>\…`. Deliberately
 separate from v1's `%APPDATA%\opendump`.

@@ -140,41 +140,37 @@ No motion when `Hidden`. No motion at all under reduced-motion (see §8).
 
 ## 5. Placement
 
-**She has a band, not a corner.** A floating overlay in the bottom-right was built and removed: it
-always covered either the inspector's buttons (Open / Reveal / Quarantine) or two and a half review
-rows, at every size from 72 to 300 px. The window's bottom-right corner is data, not margin.
+**She has a card in the right rail, not a floating corner.** A bottom-right overlay was built and
+deleted (it covered the inspector's buttons and review rows at every size), and so was a bottom
+dock (it cost 72 pt of map height and still needed a second home in the rail).
 
-### 5.1 The dock
+### 5.1 The guide card
 
-A real `TopBottomPanel::bottom("dock")`, 72 pt tall, full width, `pal().panel` fill. It is layout,
-not overlay: every pane is laid out above it, so nothing can be covered.
+The right rail is always visible: drive or folder inspector at the top, **Sumi's card pinned at the
+bottom**, above the window edge.
 
-- **Left:** her one line of copy (§4.2), 12 pt, muted, left-aligned and vertically centred.
-- **Right:** her art, ~62 px tall, bottom-aligned — she reads as standing in the band.
-- **Cost:** 72 pt of height, about 1.5 review rows, on a 820 pt window. At the 600 pt minimum window
-  the dock drops to 56 pt and she is cropped to the head.
-- **No interaction:** the dock takes no `Sense`; clicks pass to the panel behind it.
+- **Title:** `SUMI · DRIVE GUIDE`, 9.5 pt, dim.
+- **Headline:** tier + exclusive size, in that tier's colour.
+- **Body:** the matched rule's `reason`, verbatim. Never prose she invents.
+- **Action:** one tier-appropriate line — *Safe to clear* / *Your call* / *I would keep this one* /
+  *Locked, not offered*.
+- **Portrait:** 72 pt beside the text, `--mascot <px>` to review another size.
+- **No match:** "No rule matched · {size}" and a pointer at Inspect contents.
+
+The rail is a `SidePanel`, 304 pt wide, on every pane. Cost: zero — it already existed for the map.
 
 ### 5.2 Growth
 
-The dock is the only thing that changes size, and only in two states:
-
-| State | Dock | Art |
-|---|---|---|
-| No scan yet / scanning | **132 pt** | 120 pt, full head and shoulders |
-| Everything else | 72 pt | 62 pt, head and shoulders |
-| `--mascot <px>` | that height | clamped to the dock |
-
-Content shifts by 60 pt when a scan starts. That is acceptable because the scan itself already
-replaces the whole central pane.
+There is nothing to grow: the card is the same size in every state, and at the 600 pt minimum
+window it stays inside the rail. If the rail ever collapses on a small window, the card collapses
+with it and she disappears rather than overlapping content.
 
 ### 5.3 Never
 
-- Over the review list, the treemap, the inspector, or any button — the dock makes this structural.
+- Over the review list, the treemap, the inspector, or any button — the rail makes this structural.
 - As a floating overlay above the content, at any size. That decision is settled; do not re-open it
   without a screenshot of Review and Rules.
-- Spoken or animated during the purge confirmation. The dock stays put and she goes still; the card
-  owns the screen.
+- Spoken or animated during the purge confirmation. She goes still; the card owns the screen.
 
 ### 5.4 Light and dark
 
