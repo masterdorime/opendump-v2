@@ -105,13 +105,14 @@ cargo run --release -- --probe     # RAM/VRAM only, no scan (fast), no window
 cargo run --release -- --mascot 200 --pane review   # labelled slot, 200 pt tall
 cargo run --release -- --pane quarantine            # open any pane directly
 cargo run --release -- --mascot-image               # draw the baked art instead of the slot
+cargo run --release -- --zoom "C:\...\npm-cache"    # open the inspector on one folder
 ```
 
-The mascot lives in a bottom **dock** — a real `TopBottomPanel`, 72 pt tall, so every pane is laid
-out *around* it and nothing is covered. `--mascot <px>` grows the dock for review. A floating corner
-overlay was built first and deleted: at any size it covered either the inspector's buttons or two
-and a half review rows. The artwork is a placeholder cut from a reference image and is **not**
-shippable — `mascotdesign.md` holds the real spec.
+The mascot has two homes, both real layout: the **dock** (`TopBottomPanel::bottom`, 72 pt, grows
+to 132 when there is no scan or a scan is running) and the **guide card** pinned under the
+inspector. The card may only restate the matched rule's tier, size and reason plus one action
+line — same ceiling as the AI, it never invents a verdict. The artwork is a placeholder cut from a
+reference image and is **not** shippable — `mascotdesign.md` holds the real spec.
 
 User data: `%APPDATA%\opendump-native\` — `journal.jsonl`, `quarantine\<batch>\…`. Deliberately
 separate from v1's `%APPDATA%\opendump`.

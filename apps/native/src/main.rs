@@ -2764,12 +2764,50 @@ impl App {
         let files = node.map(|node| node.files).unwrap_or(view.files);
         let share = size as f64 / view.bytes.max(1) as f64 * 100.0;
 
+        // What the rule said about the selected folder, in her voice.
+        let candidate = view
+            .candidates
+            .iter()
+            .find(|candidate| candidate.path == current);
+        let (guide_headline, guide_body, guide_action, guide_colour) = match candidate {
+            Some(candidate) => {
+                let action = match candidate.tier {
+                    Tier::SafePurge => "Safe to clear. It rebuilds itself.",
+                    Tier::Review => "Your call. I cannot tell what you need.",
+                    Tier::Keep => "I would keep this one.",
+                    Tier::Locked => "Locked. It is not offered.",
+                };
+                let body = if candidate.blocked && candidate.blocked_bytes > 0 {
+                    format!(
+                        "{} It holds {} it will not remove.",
+                        candidate.reason,
+                        bytes(candidate.blocked_bytes)
+                    )
+                } else {
+                    candidate.reason.clone()
+                };
+                (
+                    format!("{} \u{00b7} {}", tier_label(candidate.tier), bytes(candidate.size)),
+                    body,
+                    action.to_string(),
+                    tier_color(candidate.tier),
+                )
+            }
+            None => (
+                format!("No rule matched \u{00b7} {}", bytes(size)),
+                "No rule knows this folder. Open it and look before deciding.".to_string(),
+                "Inspect contents first.".to_string(),
+                pal().muted,
+            ),
+        };
+
         let mut go: Option<String> = None;
         let mut stage: Option<String> = None;
         let mut inspect_target: Option<String> = None;
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
+            .max_height((ui.available_height() - 122.0).max(120.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(last_component(&current)).strong().size(13.5));
@@ -2882,6 +2920,39 @@ impl App {
                     }
                 }
             });
+
+        // Sumi's card. She may restate what a rule decided and point at the
+        // next step; she may never invent a verdict of her own.
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(RichText::new("SUMI \u{00b7} DRIVE GUIDE").size(9.5).color(pal().dim));
+        ui.add_space(4.0);
+        ui.horizontal_top(|ui| {
+            let portrait = 82.0;
+            let text_width = (ui.available_width() - portrait - 12.0).max(80.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(text_width, 0.0),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.label(
+                        RichText::new(&guide_headline)
+                            .size(11.5)
+                            .strong()
+                            .color(guide_colour),
+                    );
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(&guide_body).size(10.0).color(pal().muted));
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(&guide_action).size(10.0).color(pal().text));
+                },
+            );
+            let (rect, _) = ui.allocate_exact_size(
+                egui::vec2(portrait * 0.76, portrait),
+                egui::Sense::hover(),
+            );
+            self.paint_mascot(ui.painter(), rect);
+        });
 
         if let Some(path) = go {
             self.zoom = if path == root { None } else { Some(path) };
@@ -3563,6 +3634,11 @@ fn main() -> eframe::Result<()> {
         }
     }
     app.mascot_image = argv.iter().any(|arg| arg == "--mascot-image");
+    if let Some(index) = argv.iter().position(|arg| arg == "--zoom") {
+        if let Some(path) = argv.get(index + 1) {
+            app.zoom = Some(path.clone());
+        }
+    }
     if let Some(index) = argv.iter().position(|arg| arg == "--pane") {
         app.pane = match argv.get(index + 1).map(|value| value.as_str()) {
             Some("review") => Pane::Review,
