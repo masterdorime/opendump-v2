@@ -1,35 +1,33 @@
-# Sumi — mascot design
+# Mascot design — the disc girl
 
-**Status:** design agreed 2026-10-29 · **implementation not started** · art is a placeholder until real
-PNGs arrive.
-**Target:** `apps/native` (v2, egui 0.29) — not v1. v2 has no image pipeline today, so this document
-also specifies the one being added.
-**One-line:** a night-shift auditor who counts your disk, stamps her verdicts, and is asleep by the
-time you read the report.
+**Status:** character chosen from candidates (flat CD-girl sheet); app integration is built and
+running with a placeholder; **no final art yet**.
+**Target:** `apps/native` (v2, egui 0.29).
+**Working name:** none. The UI says `DRIVE GUIDE`; pick a name before the first real asset, because
+it lands in filenames and the settings key.
 
 ---
 
 ## 1. Why she exists
 
-1. **The empty screen is the weakest screen.** Before a scan, after a scan, and during a 90-second
-   scan there is nothing to look at. That is where she lives.
-2. **She explains the product without a tooltip.** A stamp and a magnifier say *classified by rule*,
-   which is the whole engine, faster than any onboarding copy.
-3. **She is the tone.** A tool that permanently deletes files should feel calm and precise, never
-   excited. A tired colleague is a trust signal; a cheering mascot is not.
+1. **The empty and idle states are the weakest screens.** She owns the rail space under the
+   inspector, which was previously dead.
+2. **The disc explains the product.** This app maps a disk. A platter behind her ear says *storage*
+   in a way a folder icon never will.
+3. **She is the tone.** A tool that permanently deletes files should feel calm and precise. She is
+   deadpan, not cheerful.
 
 ## 2. Non-negotiables
 
-These are safety rules, not style preferences. A change that breaks one is a regression.
-
 | # | Rule | Reason |
 |---|---|---|
-| 1 | **She is never drawn over data.** She has a dock, not an overlay. | A corner overlay covered the inspector's buttons and review rows at every size tried. |
-| 2 | **She goes still during the purge confirmation.** No motion, no copy, no celebration. | A cheerful character beside "delete 12.4 GB permanently" reads as endorsement of an irreversible act. |
-| 3 | **She never receives clicks.** | The dock is layout, not a control. |
-| 4 | **She carries no information that exists nowhere else.** No tier colour, no byte count, no state is readable only from her. | Decorative assets must not be an accessibility dependency. |
-| 5 | **She can be turned off in one click, and the choice persists.** | Motion and character art are not for everyone. |
-| 6 | **No text baked into the artwork.** | Text dies at 62 px and cannot be translated. |
+| 1 | **She lives in the right rail's guide card.** No floating overlay. | A corner overlay covered the inspector's buttons and review rows at every size tried. |
+| 2 | **She goes still during the purge confirmation.** No spin, no copy, no celebration. | A cheerful character beside "delete 12.4 GB permanently" reads as endorsement. |
+| 3 | **She never receives clicks.** | The card is layout, not a control. |
+| 4 | **She carries no information that exists nowhere else.** | Decorative art must not be an accessibility dependency. |
+| 5 | **She can be turned off in one click, and the choice persists.** | Not everyone wants a character in a disk tool. |
+| 6 | **No text baked into the artwork.** | Text dies at 72 px and cannot be translated. |
+| 7 | **Her red is never a signal.** One thin pinstripe at most, never a filled badge. | `#FF2D55` already means `LOCKED` in the map. Two reds meaning different things is a bug. |
 
 ## 3. Character
 
@@ -37,148 +35,106 @@ These are safety rules, not style preferences. A change that breaks one is a reg
 
 | Field | Value |
 |---|---|
-| Name | **Sumi** (墨, "ink") |
-| Role | Night auditor of the drive. Counts, stamps, files. Never deletes. |
-| Temperament | Precise, unhurried, faintly amused. Not shy, not bubbly, not clumsy. |
-| Age read | Adult colleague. Never a child — this tool destroys data. |
-| Signature | Sleeves past the fingertips, blazer two sizes too big, one strand of hair permanently out of place. |
-| Prop | A rubber stamp. Its pad is the only place a tier colour is allowed to appear on her. |
+| Role | The drive, personified. Not a clerk, not an idol — a machine with a face. |
+| Temperament | Deadpan, patient, faintly bored. Never winks, never celebrates. |
+| Age read | Late teens at the youngest; the current sheets read younger and need lengthening. |
+| Signature | A CD platter where an ear would be, repeated as disc joints on the shoulders and cuffs. |
+| Motif | Fragmentation — pastel shards in the hair, like a disc that has been read in pieces. |
 
 ### 3.2 Proportions
 
 | Measure | Value | Note |
 |---|---|---|
-| Head : total height | **1 : 3.5** | Not chibi. Chibi undercuts trust on a destructive screen. |
-| Eye line | 55 % down the head | Low eye line reads calm; high reads startled. |
-| Shoulders | Narrow, sloped | The oversized blazer supplies the width, not the body. |
-| Cuffs | Past the fingertips | The silhouette signature. Must survive at 72 px. |
-| Pose | Standing, weight on one leg, stamp held against the chest | Symmetrical T-pose is forbidden. |
+| Head : total | **1 : 3.5** | The candidate sheets are closer to 1 : 2.8. Lengthen the body, not the head. |
+| Eye line | 55 % down the head | Current art sits at ~45 %, which reads younger. |
+| Silhouette | Disc + bob + wide jacket | Those three shapes must survive at 40 px. |
+| Hands | Never rendered | Every candidate sheet has malformed hands. The sleeves are the design. |
 
 ### 3.3 Palette
 
-Four values only. Deliberately fewer than the UI so she never competes with the tier colours.
+Six values, not four — the disc needs its prism, but only two bands of it.
 
 | Role | Hex | Where |
 |---|---|---|
-| Hair / outline | `#1A1416` | Hair, brow, the 1 px outer contour |
-| Garment | `#4D5A6E` | Blazer |
-| Shirt / paper | `#F0ECE8` | Collar, cuffs, stamp body |
-| Accent | `#E02B3C` | The pen clipped to her lapel — **nothing else** |
-| Skin | `#F2D6C6` | Face, hands |
+| Paper | `#F2F1F4` | Hair, jacket |
+| Ink | `#17161A` | Outline, underlayer, disc hub |
+| Silver | `#C9C7D0` | Disc body, shading planes |
+| Prism A | `#8FE3E0` | One shard band (cyan) |
+| Prism B | `#F2A8D2` | One shard band (pink) |
+| Accent | `#E02B3C` | One pinstripe. Matches the UI accent — and must never be confused with LOCKED |
 
-The UI accent is `#E02B3C` (dark theme). Light theme uses a deeper red for contrast; **her pen stays
-`#E02B3C`**, because a pen is not a UI control and does not need to pass contrast against text.
+**Rule: two prism bands, not five.** The candidate has mint, lilac, cyan, pink and yellow. Five
+pastels in a UI whose only saturated colours are tier-coded makes the map look like her background.
 
 ### 3.4 Silhouette test
 
-Fill her in solid black at 72 px. A stranger must still identify: bob haircut, oversized shoulders,
-cuffs past the hands, something rectangular held at the chest. If a pose fails this, it is wrong no
-matter how good the render looks at 1024 px.
+Fill her solid black at 40 px. A stranger must identify: a bob, a disc at the ear, a wide angular
+jacket. If the shards are the only thing that survives, the design is wrong.
 
 ### 3.5 Expression sheet
 
-Seven drawings. Six are optional if art budget is tight; **idle and blink are mandatory**.
-
 | # | Key | Face | Body | Used when |
 |---|---|---|---|---|
-| 1 | `idle` | Half-lidded, single highlight, small flat mouth | Stamp at chest | Default; empty state |
-| 2 | `blink` | Eyes closed, relaxed brow | Unchanged | 120 ms every 4–7 s |
-| 3 | `asleep` | Eyes closed, mouth slightly open, head tilted | Shoulders dropped | Idle 60 s · after purge |
-| 4 | `squint` | One eye through the magnifier | Magnifier raised | Scanning |
-| 5 | `brow` | One eyebrow up, mouth unchanged | Stamp offered outward | Review list open |
-| 6 | `stamp` | Eyes down at the work | Arm down, stamp in contact | 400 ms on scan completion |
-| 7 | `empty_hands` | Neutral, eyes forward | Both hands empty, no stamp | Quarantine view |
+| 1 | `idle` | Deadpan, half-lidded, small mouth | Arms at sides | Default |
+| 2 | `blink` | Eyes closed | Unchanged | 120 ms, every 4–7 s |
+| 3 | `scan` | Eyes down, brow slightly drawn | Disc spinning | Scanning |
+| 4 | `review` | One eyebrow up | Head tilt | Review pane, or a REVIEW folder |
+| 5 | `asleep` | Eyes closed, mouth open | Shoulders dropped | Idle 60 s |
+| 6 | `disc` | — | **Separate texture** | Rotated in code during a scan |
 
-Rule: **expression is carried by the eyes and the eyebrows, never by the mouth alone.** At 72 px the
-mouth is two pixels.
-
----
+The disc is its own image so scanning costs a rotation, not a new drawing.
 
 ## 4. Behaviour
 
-### 4.1 State machine
+### 4.1 States
 
-`MascotMode` is derived, never stored:
-
-| Window state | Dock | Art height | Pose |
-|---|---|---|---|
-| No scan in memory | **132 pt** | 120 px | `idle` / `asleep` after 60 s |
-| Scan running | **132 pt** | 120 px | `squint` |
-| Scan just finished (≤ 2 s) | 72 pt | 62 px | `stamp` |
-| Scan present, any pane | 72 pt | 62 px | `idle` |
-| **Purge confirmation open** | 72 pt | 62 px | still, no motion, no copy |
-| User toggled her off | 0 pt | — | — |
+| Window state | Card | Art |
+|---|---|---|
+| No scan | Normal | `asleep` after 60 s |
+| Scanning | Normal | `scan`, disc rotating 1 rev / 1.2 s |
+| Scan done | Normal | `idle` |
+| REVIEW folder selected | Normal | `review` |
+| Purge confirmation open | Normal | `idle`, rotation stopped |
+| Toggled off | Card hidden | — |
 
 ### 4.2 Copy
 
-One line maximum, only in these four states. Voice: a colleague at 3 a.m., not a marketing mascot.
-Sentence case, no exclamation marks, no emoji.
+One line maximum, in her voice: a machine that counts, not a companion. No exclamation marks.
 
 | State | Line |
 |---|---|
-| Empty | "Nothing yet. I'll wait." |
+| Empty | "Nothing yet." |
 | Scanning | "Reading {files} names…" |
-| Scan done | "Counted. Twice." |
-| Review | "This one's yours." |
+| Done | "Counted." |
+| Review folder | "This one is yours." |
+| No rule matched | "No rule knows this folder." |
 
-Forbidden: anything about deletion, anything congratulating the user, anything that implies she will
-do the deleting.
+The tier, size and reason in the guide card come from the rule engine. She may restate them; she
+may never invent a verdict — the same ceiling the local AI has.
 
 ### 4.3 Motion
 
-| Motion | Spec | Driver |
-|---|---|---|
-| Breathing bob | 1 px vertical, sine, 3.2 s period | `ctx.input(\|i\| i.time)` |
-| Blink | swap to `blink`, 120 ms, random 4–7 s | time + a stored next-blink deadline |
-| Scan start lean | 2 px toward the content, 250 ms ease-out | state transition |
-| Stamp contact | scale 1.05× for 400 ms, then back | state transition |
-| Enter / leave | fade 150 ms + 6 px rise | mode change |
+| Motion | Spec |
+|---|---|
+| Disc spin | 1 revolution / 1.2 s while scanning, ease-out to stop |
+| Blink | swap frame, 120 ms, random 4–7 s |
+| Breathing | 1 px vertical, 3.2 s |
+| Enter | fade 150 ms |
 
-No motion when `Hidden`. No motion at all under reduced-motion (see §8).
-
----
+No motion during the purge card. None under reduced-motion.
 
 ## 5. Placement
 
-**She has a card in the right rail, not a floating corner.** A bottom-right overlay was built and
-deleted (it covered the inspector's buttons and review rows at every size), and so was a bottom
-dock (it cost 72 pt of map height and still needed a second home in the rail).
+The right rail is always visible: drive or folder inspector at the top, **the guide card pinned at
+the bottom**, above the window edge.
 
-### 5.1 The guide card
-
-The right rail is always visible: drive or folder inspector at the top, **Sumi's card pinned at the
-bottom**, above the window edge.
-
-- **Title:** `SUMI · DRIVE GUIDE`, 9.5 pt, dim.
+- **Title:** `DRIVE GUIDE`, 9.5 pt, dim.
 - **Headline:** tier + exclusive size, in that tier's colour.
-- **Body:** the matched rule's `reason`, verbatim. Never prose she invents.
+- **Body:** the matched rule's `reason`, verbatim.
 - **Action:** one tier-appropriate line — *Safe to clear* / *Your call* / *I would keep this one* /
   *Locked, not offered*.
-- **Portrait:** 72 pt beside the text, `--mascot <px>` to review another size.
-- **No match:** "No rule matched · {size}" and a pointer at Inspect contents.
-
-The rail is a `SidePanel`, 304 pt wide, on every pane. Cost: zero — it already existed for the map.
-
-### 5.2 Growth
-
-There is nothing to grow: the card is the same size in every state, and at the 600 pt minimum
-window it stays inside the rail. If the rail ever collapses on a small window, the card collapses
-with it and she disappears rather than overlapping content.
-
-### 5.3 Never
-
-- Over the review list, the treemap, the inspector, or any button — the rail makes this structural.
-- As a floating overlay above the content, at any size. That decision is settled; do not re-open it
-  without a screenshot of Review and Rules.
-- Spoken or animated during the purge confirmation. She goes still; the card owns the screen.
-
-### 5.4 Light and dark
-
-One asset serves both. On light backgrounds she gains a **1 px `#1A1416` outer contour** and a soft
-warm shadow (`#000000` at 12 % alpha, 8 px blur, 2 px y-offset) so the off-white shirt does not merge
-with the `#F7F5F5` background. Bake the contour into the PNG; do not draw it in code.
-
----
+- **Portrait:** 72 pt by default; `--mascot <px>` to review another size.
+- **Rail width:** 304 pt, already present — the card costs no layout.
 
 ## 6. Assets
 
@@ -186,172 +142,94 @@ with the `#F7F5F5` background. Bake the contour into the PNG; do not draw it in 
 
 | File | Size | Alpha | Notes |
 |---|---|---|---|
-| `sumi_idle.png` | 1024 px tall, ~512 wide | transparent | **Mandatory.** Base pose |
-| `sumi_blink.png` | same canvas | transparent | **Mandatory.** Identical framing; only eyes change |
-| `sumi_stamp.png` | same canvas | transparent | Optional; arm down |
-| `sumi_asleep.png` | same canvas | transparent | Optional; head tilt |
-| `sumi_squint.png` | same canvas | transparent | Optional; magnifier |
-| `sumi_empty_hands.png` | same canvas | transparent | Optional |
+| `mascot_idle.png` | 1024 px tall | transparent | **Mandatory.** Deadpan |
+| `mascot_blink.png` | same canvas | transparent | **Mandatory.** Eyes only |
+| `mascot_disc.png` | square, 512 px | transparent | **Mandatory.** The disc alone, centred and circular, so it can rotate |
+| `mascot_review.png` | same canvas | transparent | Optional |
+| `mascot_asleep.png` | same canvas | transparent | Optional |
 
 Rules:
 
-- **Identical canvas and anchor** for every frame. Frame swaps must not shift her by a pixel.
-- Flat cel shading, no gradients on skin, no texture patterns — both mush at 72 px.
-- Line weight ≈ 2 px at 1024, i.e. ~0.35 px at 72. Keep contours ≥ 3 px at source.
-- No drop shadow in the file; shadow is drawn in code.
-- No text, no UI chrome, no background, no border.
+- Identical canvas and anchor across frames.
+- Flat cel only: no gradients, no rim light, no rendered shadows. The candidate sheets are AI
+  renders with soft shading; they must be flattened, not traced.
+- 1 px ink contour baked in, so the white jacket survives the light theme (`#F7F5F5`).
+- Crop or erase hands. Do not attempt to fix them.
 
 ### 6.2 Placeholder
 
-Until real art lands, ship `sumi_idle.png` as a procedurally drawn flat silhouette (same proportions,
-`#4D5A6E` body, `#1A1416` outline, transparent) at the same 1024 px canvas. It exists to prove the
-pipeline, and the file is replaced without touching code.
+`apps/native/assets/mascot240x315.rgba` — a flattened cutout of the chosen candidate, raw RGBA at
+240×315, loaded exactly like the logo. It proves the pipeline; it is not shippable.
 
-### 6.3 Delivery checklist
-
-- [ ] Transparent background confirmed (not white).
-- [ ] Canvas identical across frames.
-- [ ] Silhouette test passed at 72 px.
-- [ ] Reads on both `#131011` and `#F7F5F5`.
-- [ ] No red anywhere except the pen.
-- [ ] PNG optimised, each under ~150 KB.
-
----
-
-## 7. Implementation
-
-### 7.1 Dependency
-
-`eframe 0.29` is already pinned. Add:
-
-```toml
-egui_extras = { version = "0.29", features = ["image"] }
-```
-
-That pulls in the `image` crate, which decodes the PNGs. Nothing else is added; no webview, no
-runtime asset folder.
-
-### 7.2 Code shape
-
-All in `apps/native/src/main.rs`, consistent with the one-file rule.
+## 7. Implementation (as built)
 
 ```
-consts    SUMI_IDLE / SUMI_BLINK / SUMI_STAMP: &[u8] = include_bytes!("../assets/sumi_*.png")
-          SUMI_FULL = 180.0 · SUMI_PEEK = 72.0
-types     enum MascotMode { Hidden, Full, Peek }
-logic     mascot_mode(&self) -> MascotMode        // derived from scan state + pane + toggle
-          next_blink(&mut self, now: f64)
-views     draw_sumi(&mut self, ui, mode)          // reserves rect, paints texture, no Sense
+consts    MASCOT_RGBA/W/H   raw RGBA, include_bytes!, no decoder dependency
+fields    mascot_art: Option<egui::TextureHandle>
+          mascot_image: bool          --mascot-image
+          mascot_preview: Option<f32> --mascot <px>
+views     guide card pinned under the inspector (fn inspector)
+flags     --pane <name>, --zoom <path>
 ```
 
-Loading: decode once at startup into `ColorImage`, `ctx.load_texture("sumi_idle", …,
-TextureOptions::LINEAR)`. 1024 px source covers 180 px at 5.7× for HiDPI; no mipmaps needed.
+The card computes its copy from the selected candidate: tier label, exclusive size, the rule's
+reason, and one action line. No match produces "No rule matched" rather than a guess.
 
-### 7.3 Settings persistence — a real trap
-
-`save_light()` currently rewrites `settings.json` as `{"light": …}`, discarding every other key. Adding
-`"mascot"` without fixing this means toggling the theme wipes the mascot preference and vice versa.
-Replace the pair with a small settings struct (or read-merge-write) so both survive:
-
-```json
-{ "light": false, "mascot": true }
-```
-
-Default `mascot: true` (she is the point), one click to remove her.
-
-### 7.4 Preview flag
-
-`opendump-native --mascot-preview` opens the window and cycles `Full → Peek → Hidden` on a key press,
-without scanning. Without it, every visual check costs a 90-second scan.
-
-### 7.5 Traps
+### 7.1 Traps already hit
 
 | Trap | Why it bites |
 |---|---|
-| Drawn in an `Area` | An `Area`'s painter is clipped to its own content rect — the same family as the dim-overlay bug (§6.3 of `AGENTS.md`) |
-| `Sense::click()` on the peek | Steals treemap clicks |
-| Mixing `pixels_per_point` into the size | On 125 % scaling she becomes 225 px and covers the map; size in points, not pixels |
-| Re-decoding the PNG per frame | 1024² decode on the UI thread, ~30 ms hitch |
-| Frame anchor drift | Blink shift of 1 px is visible at 72 px as a jitter |
-| Alpha fringe | PNG straight-alpha over a dark background leaves a halo; premultiply on load |
-
----
+| Floating overlay | Covered the inspector's buttons and 2½ review rows at every size |
+| Bottom dock | Cost 72 pt of map height and still needed the rail for Review/Rules |
+| Hand-edited settings | `save_light()` rewrites `settings.json` whole; a mascot key would be wiped. Fix it before adding the toggle |
+| `pixels_per_point` in sizes | 125 % scaling turns a 72 pt card into 90 px and clips the rail |
 
 ## 8. Accessibility
 
-- **Reduced motion** (`prefers-reduced-motion` equivalent; on Windows, the animation setting in
-  Settings → Accessibility): no bob, no blink, no lean. She becomes a still image.
-- **Toggle** in the Rules pane, persisted, labelled "Sumi" with the description "show the mascot".
-- **Decorative:** no tooltip may contain unique information; screen-reader users lose nothing.
-- **Contrast:** she is never the only signal for a tier; the row text and colour dot remain.
-- **No autoplay audio.** She never speaks aloud.
-
----
+- **Reduced motion:** no spin, no blink, no breathing. A still image.
+- **Toggle:** in the Rules pane, persisted, labelled "Show the mascot".
+- **Decorative:** no tooltip may contain unique information.
+- **Contrast:** the card never carries a tier colour that is not also in the row text.
+- **No audio**, ever.
 
 ## 9. Prompt pack
 
-Use one generator session, one seed, and **image-to-image from `sumi_idle.png`** for every other
-expression. Four independent generations will not produce one character.
+Target the flat candidate, not the painterly one. One seed, image-to-image from `idle`.
 
-**Style line (append to every prompt):**
+**Style line:**
 
-> flat cel-shaded anime, limited palette of four colours plus one red accent, clean 2 px line weight
-> at 1024 px, soft rim light, transparent background, upper body, adult woman, tired half-lidded eyes,
-> oversized blazer with sleeves past the fingertips, short messy bob, rubber stamp held against the
-> chest, no text, no logos, front three-quarter view facing left
+> flat cel-shaded anime, 2 px line weight at 1024 px, limited palette of white, silver, black, two
+> pastel prism bands and one red pinstripe, hard ink outline, transparent background, upper body,
+> deadpan expression, half-lidded eyes, white bob, CD disc hair ornament, oversized white jacket
+> with disc buttons, black underlayer, no hands visible, no text
 
-**Idle:**
+**Idle:** neutral stance, arms at sides, small flat mouth, no smile.
 
-> character sheet, neutral standing pose, weight on one leg, calm expression, single eye highlight,
-> muted slate blazer, off-white shirt, ink-black hair, small red pen on the lapel
+**Blink:** identical, eyes closed.
 
-**Blink:**
+**Scan:** eyes down, head tilted toward the content, disc implied spinning.
 
-> identical character, identical framing and pose, eyes fully closed, relaxed brow
+**Negative:**
 
-**Squint (scanning):**
-
-> identical character, holding a round magnifier to one eye, head tilted, the other eye half-lidded
-
-**Asleep (idle):**
-
-> identical character, eyes closed, head tilted, shoulders dropped, mouth slightly open, still
-> holding the stamp
-
-**Negative prompt:**
-
-> text, watermark, signature, extra fingers, sparkle eyes, blush overload, chibi proportions, bright
-> saturated background, gradients on skin, motion blur, multiple characters, school uniform, cat ears
-
-**Consistency workflow:** generate idle at 1024 px → keep the seed → img2img at 0.35–0.45 strength
-for each expression → check the silhouette test → export PNG with alpha → verify the canvas is
-identical across frames.
-
----
+> smile, wink, blush, sparkle eyes, open mouth, school uniform, ribbon, pleated skirt, rainbow,
+> five-colour gradient, hands, extra fingers, text, watermark, 3d, realistic, painterly, soft
+> shading, rim light, background scenery
 
 ## 10. Acceptance
 
-The feature is done when all of these hold:
-
-- [ ] `cargo test --workspace` green, no new warnings.
-- [ ] `--selftest` output unchanged.
-- [ ] With her on and off, the treemap, review list, inspector, quarantine and purge flows are
-      pixel-identical outside her reserved rects.
-- [ ] Purge confirmation shows no trace of her.
-- [ ] Clicking a tile under the peek still selects that tile.
-- [ ] Toggling theme and toggling mascot do not erase each other.
-- [ ] 125 % and 150 % display scaling: she stays 180 / 72 points.
-- [ ] `--mascot-preview` shows all three modes without a scan.
-- [ ] Exe growth ≤ 500 KB with real art.
-- [ ] `AGENTS.md` §2 and the README note are updated in the same commit.
-
----
+- [ ] 40 px silhouette test passes: bob, disc, jacket.
+- [ ] Two prism bands at most; the rest white/silver/black.
+- [ ] Reads on `#131011` and on `#F7F5F5` without a halo.
+- [ ] No hands in any frame.
+- [ ] Disc is a separate square texture and rotates cleanly.
+- [ ] Card copy never states a verdict the rules did not produce.
+- [ ] Purge confirmation shows her static.
+- [ ] `cargo test --workspace` stays green.
 
 ## 11. Open questions
 
-1. **Name.** "Sumi" is a proposal, not a decision. It appears in filenames and the toggle label, so it
-   is cheap to change now and annoying later.
-2. **Sleep at 60 s** — is a sleeping mascot charming, or does it look like the app has crashed?
-   Test it in `--mascot-preview` before committing.
-3. **Does she belong in v1 at all?** v1 is the shipped product; the same PNGs would drop into the
-   renderer in an hour. Not in scope here, but the asset contract above is deliberately portable.
+1. **Name.** None yet. It lands in filenames, the settings key and the card title.
+2. **Tone.** The flat candidate is deadpan; the painterly one is soft. Those are different products.
+   This spec assumes deadpan.
+3. **Palette.** Six values is already a compromise. If the map starts to feel grey next to her, cut
+   the prism to one band.
