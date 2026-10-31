@@ -30,11 +30,11 @@ const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../.
 const LOGO_RGBA: &[u8] = include_bytes!("../assets/logo64.rgba");
 const LOGO_SIDE: usize = 64;
 
-/// Sumi, the placeholder mascot. Raw RGBA, same pipeline as the logo: no
-/// decoder, no dependency, baked into the exe.
-const SUMI_RGBA: &[u8] = include_bytes!("../assets/sumi240x315.rgba");
-const SUMI_W: usize = 240;
-const SUMI_H: usize = 315;
+/// The mascot placeholder. Raw RGBA, same pipeline as the logo: no decoder,
+/// no dependency, baked into the exe.
+const MASCOT_RGBA: &[u8] = include_bytes!("../assets/mascot240x315.rgba");
+const MASCOT_W: usize = 240;
+const MASCOT_H: usize = 315;
 
 // ------------------------------------------------------------------- palette
 
@@ -419,12 +419,10 @@ struct App {
     map_colour: MapColour,
     search: String,
     logo: Option<egui::TextureHandle>,
-    /// Sumi placeholder texture; `None` until the first frame.
-    sumi: Option<egui::TextureHandle>,
+    /// Mascot texture; `None` until the first frame.
+    mascot_art: Option<egui::TextureHandle>,
     /// `Some(size)` when `--mascot <px>` pins the preview size.
     mascot_preview: Option<f32>,
-    /// `--mascot-image` swaps the placeholder box for the real texture.
-    mascot_image: bool,
 }
 
 impl App {
@@ -464,9 +462,8 @@ impl App {
             map_colour: MapColour::Status,
             search: String::new(),
             logo: None,
-            sumi: None,
+            mascot_art: None,
             mascot_preview: None,
-            mascot_image: false,
         };
 
         // Open to the last map when the cache was written by these rules.
@@ -2538,16 +2535,14 @@ impl App {
     /// instead of being covered — the corner overlay always won that fight.
     /// Art or placeholder, inside a rect somebody else reserved.
     fn paint_mascot(&self, painter: &egui::Painter, rect: egui::Rect) {
-        if self.mascot_image {
-            if let Some(texture) = self.sumi.as_ref().map(|handle| handle.id()) {
-                painter.image(
-                    texture,
-                    rect,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
-                return;
-            }
+        if let Some(texture) = self.mascot_art.as_ref().map(|handle| handle.id()) {
+            painter.image(
+                texture,
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+            return;
         }
         let fill = Color32::from_rgba_unmultiplied(
             pal().panel.r(),
@@ -2743,6 +2738,7 @@ impl App {
         let size = node.map(|node| node.size).unwrap_or(view.bytes);
         let files = node.map(|node| node.files).unwrap_or(view.files);
         let share = size as f64 / view.bytes.max(1) as f64 * 100.0;
+        let portrait = self.mascot_preview.unwrap_or(72.0);
 
         // What the rule said about the selected folder, in her voice.
         let candidate = view
@@ -2787,7 +2783,7 @@ impl App {
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .max_height((ui.available_height() - 122.0).max(120.0))
+            .max_height((ui.available_height() - portrait - 58.0).max(120.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(last_component(&current)).strong().size(13.5));
@@ -2901,16 +2897,15 @@ impl App {
                 }
             });
 
-        // Sumi's card. She may restate what a rule decided and point at the
+        // The mascot's card. She may restate what a rule decided and point at the
         // next step; she may never invent a verdict of her own.
         ui.add_space(6.0);
         ui.separator();
         ui.add_space(6.0);
-        ui.label(RichText::new("SUMI \u{00b7} DRIVE GUIDE").size(9.5).color(pal().dim));
+        ui.label(RichText::new("DRIVE GUIDE").size(9.5).color(pal().dim));
         ui.add_space(4.0);
         ui.horizontal_top(|ui| {
-            let portrait = self.mascot_preview.unwrap_or(72.0);
-            let text_width = (ui.available_width() - portrait - 12.0).max(80.0);
+            let text_width = (ui.available_width() - portrait * 0.762 - 12.0).max(80.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(text_width, 0.0),
                 egui::Layout::top_down(egui::Align::LEFT),
@@ -3669,7 +3664,6 @@ fn main() -> eframe::Result<()> {
             app.mascot_preview = Some(size.clamp(48.0, 480.0));
         }
     }
-    app.mascot_image = argv.iter().any(|arg| arg == "--mascot-image");
     if let Some(index) = argv.iter().position(|arg| arg == "--zoom") {
         if let Some(path) = argv.get(index + 1) {
             app.zoom = Some(path.clone());
@@ -3709,9 +3703,9 @@ fn main() -> eframe::Result<()> {
                 egui::ColorImage::from_rgba_unmultiplied([LOGO_SIDE, LOGO_SIDE], LOGO_RGBA),
                 egui::TextureOptions::LINEAR,
             ));
-            app.sumi = Some(cc.egui_ctx.load_texture(
-                "sumi",
-                egui::ColorImage::from_rgba_unmultiplied([SUMI_W, SUMI_H], SUMI_RGBA),
+            app.mascot_art = Some(cc.egui_ctx.load_texture(
+                "mascot",
+                egui::ColorImage::from_rgba_unmultiplied([MASCOT_W, MASCOT_H], MASCOT_RGBA),
                 egui::TextureOptions::LINEAR,
             ));
             if autoscan {
