@@ -1,6 +1,6 @@
 # opendump v2
 
-> **v0.1.0 — the first public build of the Rust rewrite.** Download it from
+> **v0.1.1 — the Rust rewrite, now with its own window.** Download it from
 > [Releases](https://github.com/masterdorime/opendump-v2/releases). The supported release is still
 > [opendump v0.5.0](https://github.com/masterdorime/opendump/releases) — it has the full UI, the
 > guided tour, local AI, and an installer.
@@ -51,7 +51,7 @@ and `purge` require explicit confirmation flags.
 **Requirements:** Windows 10 or 11, x64. Nothing else is bundled - the window
 talks to Win32 directly and there is no webview.
 
-- **To use a released build:** download `opendump-0.1.0-windows-x64.zip` from
+- **To use a released build:** download `opendump-0.1.1-windows-x64.zip` from
   [Releases](https://github.com/masterdorime/opendump-v2/releases), unzip it anywhere, and run
   `opendump.exe` or `opendump-native.exe`. Keep the `rules\` folder beside the executables — the
   CLI resolves `rules\rules.json` from there, and the window has the same file compiled in.
@@ -74,7 +74,7 @@ cargo build --release
 ```
 
 ```
-opendump 0.1.0 — rust core
+opendump 0.1.1 — rust core
 root      C:\Users\you\AppData\Local
 rules     rules/rules.json (80 loaded)
 
@@ -195,7 +195,7 @@ The guided tour and the cloud AI provider are still only in v0.5.
 - **Cloud AI provider** — wired, never tested against a live endpoint
 - **Multi-drive staging** — v0.5 stages on any volume
 - **Elevated tier** — `hiberfil.sys`, the Windows Update cache, DISM
-- **Code signing** — the v0.1.0 binaries are unsigned, so SmartScreen warns once
+- **Code signing** — the v0.1.1 binaries are unsigned, so SmartScreen warns once
 
 The engine is complete enough to scan, classify, quarantine, restore and purge from either a
 terminal or a window.
