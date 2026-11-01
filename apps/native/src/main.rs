@@ -30,11 +30,16 @@ const RULES_JSON: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../.
 const LOGO_RGBA: &[u8] = include_bytes!("../assets/logo64.rgba");
 const LOGO_SIDE: usize = 64;
 
-/// The mascot placeholder. Raw RGBA, same pipeline as the logo: no decoder,
-/// no dependency, baked into the exe.
-const MASCOT_RGBA: &[u8] = include_bytes!("../assets/mascot240x315.rgba");
-const MASCOT_W: usize = 240;
-const MASCOT_H: usize = 315;
+/// Mascot frames. Raw RGBA, same pipeline as the logo: no decoder, no
+/// dependency, baked into the exe. One fixed 180 x 284 canvas for every frame,
+/// cropped from the identical source box so nothing shifts between states.
+const MASCOT_IDLE: &[u8] = include_bytes!("../assets/mascot_idle.rgba");
+const MASCOT_BLINK: &[u8] = include_bytes!("../assets/mascot_blink.rgba");
+const MASCOT_SCAN: &[u8] = include_bytes!("../assets/mascot_scan.rgba");
+const MASCOT_REVIEW: &[u8] = include_bytes!("../assets/mascot_review.rgba");
+const MASCOT_SLEEP: &[u8] = include_bytes!("../assets/mascot_sleep.rgba");
+const MASCOT_W: usize = 180;
+const MASCOT_H: usize = 284;
 
 // ------------------------------------------------------------------- palette
 
@@ -419,8 +424,17 @@ struct App {
     map_colour: MapColour,
     search: String,
     logo: Option<egui::TextureHandle>,
-    /// Mascot texture; `None` until the first frame.
-    mascot_art: Option<egui::TextureHandle>,
+    /// Mascot textures; `None` until the first frame loads them.
+    mascot_idle: Option<egui::TextureHandle>,
+    mascot_blink: Option<egui::TextureHandle>,
+    mascot_scan: Option<egui::TextureHandle>,
+    mascot_review: Option<egui::TextureHandle>,
+    mascot_sleep: Option<egui::TextureHandle>,
+    /// Seconds (egui time) until the blink ends / the next one is due.
+    blink_until: f64,
+    next_blink: f64,
+    /// Last pointer or keyboard activity, for the sleep state.
+    last_activity: f64,
     /// `Some(size)` when `--mascot <px>` pins the preview size.
     mascot_preview: Option<f32>,
 }
@@ -462,7 +476,14 @@ impl App {
             map_colour: MapColour::Status,
             search: String::new(),
             logo: None,
-            mascot_art: None,
+            mascot_idle: None,
+            mascot_blink: None,
+            mascot_scan: None,
+            mascot_review: None,
+            mascot_sleep: None,
+            blink_until: 0.0,
+            next_blink: 0.0,
+            last_activity: 0.0,
             mascot_preview: None,
         };
 
@@ -1361,6 +1382,17 @@ fn install_style(ctx: &egui::Context) {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain();
+
+        // Any pointer movement or held key counts as "someone is here", which is
+        // what keeps her awake.
+        let now = ctx.input(|input| input.time);
+        if ctx.input(|input| input.pointer.delta().length() > 0.5 || !input.keys_down.is_empty())
+        {
+            self.last_activity = now;
+        }
+        if self.last_activity == 0.0 {
+            self.last_activity = now;
+        }
 
         // The probe needs a context to request repaints, which does not exist
         // until the first frame.
@@ -2533,9 +2565,37 @@ impl App {
     /// the change is live.
     /// The mascot's own band. A real panel, so content shrinks around it
     /// instead of being covered — the corner overlay always won that fight.
+    /// Which frame to show. Blink wins because it is a 120 ms overlay on
+    /// whatever state was already running.
+    fn mascot_frame(&mut self, tier: Option<Tier>, now: f64) -> Option<egui::TextureId> {
+        if now >= self.next_blink {
+            self.blink_until = now + 0.12;
+            let jitter = (now * 0.37).fract() * 3.0;
+            self.next_blink = now + 4.0 + jitter;
+        }
+        let handle = if now < self.blink_until {
+            &self.mascot_blink
+        } else if self.scanning {
+            &self.mascot_scan
+        } else if now - self.last_activity > 60.0 {
+            &self.mascot_sleep
+        } else if tier == Some(Tier::Review) {
+            &self.mascot_review
+        } else {
+            &self.mascot_idle
+        };
+        handle.as_ref().map(|texture| texture.id())
+    }
+
     /// Art or placeholder, inside a rect somebody else reserved.
-    fn paint_mascot(&self, painter: &egui::Painter, rect: egui::Rect) {
-        if let Some(texture) = self.mascot_art.as_ref().map(|handle| handle.id()) {
+    fn paint_mascot(
+        &mut self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        tier: Option<Tier>,
+        now: f64,
+    ) {
+        if let Some(texture) = self.mascot_frame(tier, now) {
             painter.image(
                 texture,
                 rect,
@@ -2745,6 +2805,7 @@ impl App {
             .candidates
             .iter()
             .find(|candidate| candidate.path == current);
+        let guide_tier = candidate.map(|candidate| candidate.tier);
         let (guide_headline, guide_body, guide_action, guide_colour) = match candidate {
             Some(candidate) => {
                 let action = match candidate.tier {
@@ -2926,7 +2987,18 @@ impl App {
                 egui::vec2(portrait * 0.76, portrait),
                 egui::Sense::hover(),
             );
-            self.paint_mascot(ui.painter(), rect);
+            let now = ctx.input(|input| input.time);
+            self.paint_mascot(ui.painter(), rect, guide_tier, now);
+            // Wake exactly when the blink ends or the next one is due, rather
+            // than spinning at 8 fps forever.
+            let until = if now < self.blink_until {
+                self.blink_until
+            } else {
+                self.next_blink
+            };
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                (until - now).clamp(0.01, 8.0),
+            ));
         });
 
         if let Some(path) = go {
@@ -3703,11 +3775,18 @@ fn main() -> eframe::Result<()> {
                 egui::ColorImage::from_rgba_unmultiplied([LOGO_SIDE, LOGO_SIDE], LOGO_RGBA),
                 egui::TextureOptions::LINEAR,
             ));
-            app.mascot_art = Some(cc.egui_ctx.load_texture(
-                "mascot",
-                egui::ColorImage::from_rgba_unmultiplied([MASCOT_W, MASCOT_H], MASCOT_RGBA),
-                egui::TextureOptions::LINEAR,
-            ));
+            let load = |name: &str, bytes: &[u8]| {
+                cc.egui_ctx.load_texture(
+                    name,
+                    egui::ColorImage::from_rgba_unmultiplied([MASCOT_W, MASCOT_H], bytes),
+                    egui::TextureOptions::LINEAR,
+                )
+            };
+            app.mascot_idle = Some(load("mascot_idle", MASCOT_IDLE));
+            app.mascot_blink = Some(load("mascot_blink", MASCOT_BLINK));
+            app.mascot_scan = Some(load("mascot_scan", MASCOT_SCAN));
+            app.mascot_review = Some(load("mascot_review", MASCOT_REVIEW));
+            app.mascot_sleep = Some(load("mascot_sleep", MASCOT_SLEEP));
             if autoscan {
                 app.start_scan(&cc.egui_ctx);
             }
