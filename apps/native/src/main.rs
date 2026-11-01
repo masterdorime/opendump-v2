@@ -38,7 +38,9 @@ const MASCOT_BLINK: &[u8] = include_bytes!("../assets/mascot_blink.rgba");
 const MASCOT_SCAN: &[u8] = include_bytes!("../assets/mascot_scan.rgba");
 const MASCOT_REVIEW: &[u8] = include_bytes!("../assets/mascot_review.rgba");
 const MASCOT_SLEEP: &[u8] = include_bytes!("../assets/mascot_sleep.rgba");
-const MASCOT_W: usize = 180;
+const MASCOT_WAVE: &[u8] = include_bytes!("../assets/mascot_wave.rgba");
+const MASCOT_POINT: &[u8] = include_bytes!("../assets/mascot_point.rgba");
+const MASCOT_W: usize = 191;
 const MASCOT_H: usize = 284;
 
 // ------------------------------------------------------------------- palette
@@ -388,6 +390,14 @@ struct ConfirmState {
     acknowledged: bool,
 }
 
+/// What the mascot is reacting to. `Greeting` is the first-run screen; `Tier`
+/// carries the selected folder's verdict, or `None` when no rule matched.
+#[derive(Clone, Copy)]
+enum MascotMood {
+    Greeting,
+    Tier(Option<Tier>),
+}
+
 struct App {
     sender: Sender<Message>,
     receiver: Receiver<Message>,
@@ -430,6 +440,8 @@ struct App {
     mascot_scan: Option<egui::TextureHandle>,
     mascot_review: Option<egui::TextureHandle>,
     mascot_sleep: Option<egui::TextureHandle>,
+    mascot_wave: Option<egui::TextureHandle>,
+    mascot_point: Option<egui::TextureHandle>,
     /// Seconds (egui time) until the blink ends / the next one is due.
     blink_until: f64,
     next_blink: f64,
@@ -481,6 +493,8 @@ impl App {
             mascot_scan: None,
             mascot_review: None,
             mascot_sleep: None,
+            mascot_wave: None,
+            mascot_point: None,
             blink_until: 0.0,
             next_blink: 0.0,
             last_activity: 0.0,
@@ -2113,7 +2127,7 @@ impl App {
         ui.vertical_centered(|ui| {
             let (rect, _) =
                 ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-            self.paint_mascot(ui.painter(), rect, None, now);
+            self.paint_mascot(ui.painter(), rect, MascotMood::Greeting, now);
 
             ui.add_space(12.0);
             if self.scanning {
@@ -2614,7 +2628,7 @@ impl App {
     /// instead of being covered — the corner overlay always won that fight.
     /// Which frame to show. Blink wins because it is a 120 ms overlay on
     /// whatever state was already running.
-    fn mascot_frame(&mut self, tier: Option<Tier>, now: f64) -> Option<egui::TextureId> {
+    fn mascot_frame(&mut self, mood: MascotMood, now: f64) -> Option<egui::TextureId> {
         if now >= self.next_blink {
             self.blink_until = now + 0.12;
             let jitter = (now * 0.37).fract() * 3.0;
@@ -2626,10 +2640,13 @@ impl App {
             &self.mascot_scan
         } else if now - self.last_activity > 60.0 {
             &self.mascot_sleep
-        } else if tier == Some(Tier::Review) {
-            &self.mascot_review
         } else {
-            &self.mascot_idle
+            match mood {
+                MascotMood::Greeting => &self.mascot_wave,
+                MascotMood::Tier(Some(Tier::Review)) => &self.mascot_review,
+                MascotMood::Tier(None) => &self.mascot_point,
+                MascotMood::Tier(_) => &self.mascot_idle,
+            }
         };
         handle.as_ref().map(|texture| texture.id())
     }
@@ -2639,10 +2656,10 @@ impl App {
         &mut self,
         painter: &egui::Painter,
         rect: egui::Rect,
-        tier: Option<Tier>,
+        mood: MascotMood,
         now: f64,
     ) {
-        if let Some(texture) = self.mascot_frame(tier, now) {
+        if let Some(texture) = self.mascot_frame(mood, now) {
             painter.image(
                 texture,
                 rect,
@@ -3019,7 +3036,7 @@ impl App {
                 egui::Sense::hover(),
             );
             let now = ctx.input(|input| input.time);
-            self.paint_mascot(ui.painter(), rect, guide_tier, now);
+            self.paint_mascot(ui.painter(), rect, MascotMood::Tier(guide_tier), now);
             ui.add_space(6.0);
             ui.label(
                 RichText::new(&guide_headline)
@@ -3829,6 +3846,8 @@ fn main() -> eframe::Result<()> {
             app.mascot_scan = Some(load("mascot_scan", MASCOT_SCAN));
             app.mascot_review = Some(load("mascot_review", MASCOT_REVIEW));
             app.mascot_sleep = Some(load("mascot_sleep", MASCOT_SLEEP));
+            app.mascot_wave = Some(load("mascot_wave", MASCOT_WAVE));
+            app.mascot_point = Some(load("mascot_point", MASCOT_POINT));
             if autoscan {
                 app.start_scan(&cc.egui_ctx);
             }

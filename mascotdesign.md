@@ -150,11 +150,14 @@ runs she is the `scan` frame with "Reading the drive…" and the current path un
 
 | File | Size | Alpha | Notes |
 |---|---|---|---|
-| `mascot_idle.png` | 1024 px tall | transparent | **Mandatory.** Deadpan |
+| `mascot_idle.png` | 688 × 1024 source | transparent | **Mandatory.** Deadpan |
 | `mascot_blink.png` | same canvas | transparent | **Mandatory.** Eyes only |
-| `mascot_disc.png` | square, 512 px | transparent | **Mandatory.** The disc alone, centred and circular, so it can rotate |
-| `mascot_review.png` | same canvas | transparent | Optional |
-| `mascot_asleep.png` | same canvas | transparent | Optional |
+| `mascot_scan.png` | same canvas | transparent | **Mandatory.** Eyes down, hand to chin |
+| `mascot_review.png` | same canvas | transparent | Built — holding a stack of files |
+| `mascot_sleep.png` | same canvas | transparent | Built — eyes closed |
+| `mascot_wave.png` | same canvas | transparent | Built — first-run greeting |
+| `mascot_point.png` | same canvas | transparent | Built — no rule matched |
+| `mascot_disc.png` | square, 512 px | transparent | **Not used.** Only if the platter ever spins |
 
 Rules:
 
