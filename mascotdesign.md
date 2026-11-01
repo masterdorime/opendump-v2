@@ -133,7 +133,8 @@ the bottom**, above the window edge.
 - **Body:** the matched rule's `reason`, verbatim.
 - **Action:** one tier-appropriate line — *Safe to clear* / *Your call* / *I would keep this one* /
   *Locked, not offered*.
-- **Portrait:** 72 pt by default; `--mascot <px>` to review another size.
+- **Portrait:** 120 pt by default; `--mascot <px>` to review another size. Width is derived from
+  `MASCOT_W / MASCOT_H` — never a literal, or she gets stretched.
 - **Rail width:** 304 pt, already present — the card costs no layout.
 
 ## 6. Assets

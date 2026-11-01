@@ -2798,7 +2798,7 @@ impl App {
         let size = node.map(|node| node.size).unwrap_or(view.bytes);
         let files = node.map(|node| node.files).unwrap_or(view.files);
         let share = size as f64 / view.bytes.max(1) as f64 * 100.0;
-        let portrait = self.mascot_preview.unwrap_or(72.0);
+        let portrait = self.mascot_preview.unwrap_or(120.0);
 
         // What the rule said about the selected folder, in her voice.
         let candidate = view
@@ -2966,7 +2966,8 @@ impl App {
         ui.label(RichText::new("DRIVE GUIDE").size(9.5).color(pal().dim));
         ui.add_space(4.0);
         ui.horizontal_top(|ui| {
-            let text_width = (ui.available_width() - portrait * 0.762 - 12.0).max(80.0);
+            let art_ratio = MASCOT_W as f32 / MASCOT_H as f32;
+            let text_width = (ui.available_width() - portrait * art_ratio - 12.0).max(80.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(text_width, 0.0),
                 egui::Layout::top_down(egui::Align::LEFT),
@@ -2984,7 +2985,7 @@ impl App {
                 },
             );
             let (rect, _) = ui.allocate_exact_size(
-                egui::vec2(portrait * 0.76, portrait),
+                egui::vec2(portrait * art_ratio, portrait),
                 egui::Sense::hover(),
             );
             let now = ctx.input(|input| input.time);
