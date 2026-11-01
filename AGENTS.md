@@ -112,11 +112,14 @@ cargo run --release -- --no-tour                  # skip it (scripted runs)
 
 `--mood` accepts `idle · blink · scan · review · sleep · wave · point · done`.
 
-The **guided tour** runs on first launch (persisted as `tour_seen` in `settings.json`) and can be
-replayed from Rules. Six steps, each a rect recorded during layout (`top`, `nav`, `cards`, `content`,
-`rail`), dimmed with four bands around the hole because egui has no even-odd fill. The mascot narrates
-it: `wave` on the first step, `point` through the middle, `done` at the end. Enter/Space advances,
-Escape skips, and it never draws over the purge confirmation.
+The **guided tour** runs on first launch and can be replayed from Rules. It is **action-gated**:
+eight steps, each one waits for the real control — Scan, a tile, Review, a tier chip, a row
+checkbox, Quarantine selected, Restore all — and advances only when the app sees the state change
+(`scan.is_some()`, `zoom.is_some()`, `picked` non-empty, and so on). The highlighted control stays
+clickable and the four bands around it block everything else, so the hole is the only live target.
+The mascot pops up in a bubble anchored to that control, mirrored when the target is on her left
+(UV swap, no extra asset), and holds `done` for 1.2 s when a step lands. Escape skips; the tour never
+asks for a purge, and it never draws over the purge confirmation.
 
 Navigation is a **left sidebar** (Map / Review / Quarantine, then Tools: Local AI, Rules); there is
 no tab row. The right rail is always present: it inspects the drive or the zoomed folder and pins
