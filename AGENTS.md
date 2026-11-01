@@ -110,8 +110,14 @@ cargo run --release -- --zoom "C:\...\npm-cache" # open the inspector on one fol
 Navigation is a **left sidebar** (Map / Review / Quarantine, then Tools: Local AI, Rules); there is
 no tab row. The right rail is always present: it inspects the drive or the zoomed folder and pins
 the **mascot guide card** at its bottom. The card may only restate the matched rule's tier, size and
-reason plus one action line — same ceiling as the AI, never an invented verdict. The artwork is a
-placeholder cut from a reference image and is **not** shippable — `mascotdesign.md` holds the spec.
+reason plus one action line — same ceiling as the AI, never an invented verdict.
+
+The mascot is the disc girl: five 180 x 284 raw-RGBA frames (`mascot_{idle,blink,scan,review,sleep}`)
+cut from AI renders with `rembg`, given a 1 px ink contour so the white jacket survives the light
+theme, and baked into the exe. States: idle, a 120 ms blink every 4–7 s, `scan` while scanning,
+`review` when a REVIEW folder is selected, `sleep` after 60 s without pointer or key input. The
+assets add ~1 MB to the binary (8.3 MB total). `mascotdesign.md` holds the spec; the frames are
+AI-generated and not final art.
 
 User data: `%APPDATA%\opendump-native\` — `journal.jsonl`, `quarantine\<batch>\…`. Deliberately
 separate from v1's `%APPDATA%\opendump`.
