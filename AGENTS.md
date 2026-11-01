@@ -120,8 +120,11 @@ The mascot is the disc girl: eight 191 x 284 raw-RGBA frames
 1 px ink contour so the white jacket survives the light theme, and baked into the exe. States:
 `wave` on the first-run screen, `idle` otherwise, a 120 ms blink every 4–7 s, `scan` while scanning,
 `done` for 3 s after a scan finishes, `review` when a REVIEW folder is selected, `point` when no
-rule matched, `sleep` after 60 s without pointer or key input. The assets add ~1.7 MB to the binary
-(9.0 MB total). `mascotdesign.md` holds the spec; the frames are AI-generated and not final art.
+rule matched, `sleep` after 60 s without pointer or key input. A "Show the mascot" checkbox in the
+Rules pane (and a `hide` link on the card) persists to `settings.json`; `save_settings` writes both
+keys every time, because the old `save_light` erased anything it did not know about. The assets add
+~1.7 MB to the binary (9.0 MB total). `mascotdesign.md` holds the spec; the frames are AI-generated
+and not final art.
 
 User data: `%APPDATA%\opendump-native\` — `journal.jsonl`, `quarantine\<batch>\…`. Deliberately
 separate from v1's `%APPDATA%\opendump`.

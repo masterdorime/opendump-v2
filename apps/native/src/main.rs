@@ -242,26 +242,54 @@ fn save_overrides(disabled: &std::collections::HashSet<String>) {
     }
 }
 
-/// UI preferences; small enough to rewrite whole on every change.
+/// UI preferences; small enough to rewrite whole on every change — but every
+/// key must be written every time, or toggling one setting erases the others.
+#[derive(Clone, Copy)]
+struct Settings {
+    light: bool,
+    mascot: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            light: false,
+            mascot: true,
+        }
+    }
+}
+
 fn settings_path() -> PathBuf {
     base_dir().join("settings.json")
 }
 
-fn load_light() -> bool {
-    std::fs::read_to_string(settings_path())
+fn load_settings() -> Settings {
+    let value = std::fs::read_to_string(settings_path())
         .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|value| value.get("light").and_then(|flag| flag.as_bool()))
-        .unwrap_or(false)
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let Some(value) = value else {
+        return Settings::default();
+    };
+    Settings {
+        light: value
+            .get("light")
+            .and_then(|flag| flag.as_bool())
+            .unwrap_or(false),
+        mascot: value
+            .get("mascot")
+            .and_then(|flag| flag.as_bool())
+            .unwrap_or(true),
+    }
 }
 
-fn save_light(light: bool) {
+fn save_settings(settings: Settings) {
     if let Some(parent) = settings_path().parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(
         settings_path(),
-        serde_json::json!({ "light": light }).to_string(),
+        serde_json::json!({ "light": settings.light, "mascot": settings.mascot })
+            .to_string(),
     );
 }
 
@@ -448,6 +476,8 @@ struct App {
     scan_done_at: Option<f64>,
     /// `--mood <name>` forces a frame, so every state can be screenshot.
     forced_mood: Option<String>,
+    /// Persisted: show the mascot at all.
+    mascot_on: bool,
     /// Seconds (egui time) until the blink ends / the next one is due.
     blink_until: f64,
     next_blink: f64,
@@ -459,7 +489,8 @@ struct App {
 
 impl App {
     fn new(sender: Sender<Message>, receiver: Receiver<Message>) -> Self {
-        set_light(load_light());
+        let settings = load_settings();
+        set_light(settings.light);
 
         let mut app = Self {
             sender,
@@ -504,6 +535,7 @@ impl App {
             mascot_done: None,
             scan_done_at: None,
             forced_mood: None,
+            mascot_on: settings.mascot,
             blink_until: 0.0,
             next_blink: 0.0,
             last_activity: 0.0,
@@ -1531,7 +1563,10 @@ impl eframe::App for App {
                         if toggle.clicked() {
                             let light = !is_light();
                             set_light(light);
-                            save_light(light);
+                            save_settings(Settings {
+                                light,
+                                mascot: self.mascot_on,
+                            });
                             std::thread::spawn(apply_title_bar_theme);
                         }
 
@@ -2135,11 +2170,12 @@ impl App {
         let top_gap = ((ui.available_height() - height - 80.0) * 0.4).max(8.0);
         ui.add_space(top_gap);
         ui.vertical_centered(|ui| {
-            let (rect, _) =
-                ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-            self.paint_mascot(ui.painter(), rect, MascotMood::Greeting, now);
-
-            ui.add_space(12.0);
+            if self.mascot_on {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+                self.paint_mascot(ui.painter(), rect, MascotMood::Greeting, now);
+                ui.add_space(12.0);
+            }
             if self.scanning {
                 ui.label(RichText::new("Reading the drive\u{2026}").size(13.0).color(pal().text));
                 if let Some(progress) = &self.progress {
@@ -2688,6 +2724,9 @@ impl App {
         mood: MascotMood,
         now: f64,
     ) {
+        if !self.mascot_on {
+            return;
+        }
         if let Some(texture) = self.mascot_frame(mood, now) {
             painter.image(
                 texture,
@@ -2764,6 +2803,19 @@ impl App {
                 }
             });
         });
+
+        ui.add_space(4.0);
+        let mut mascot_on = self.mascot_on;
+        if ui
+            .checkbox(&mut mascot_on, RichText::new("Show the mascot").size(10.5))
+            .changed()
+        {
+            self.mascot_on = mascot_on;
+            save_settings(Settings {
+                light: is_light(),
+                mascot: mascot_on,
+            });
+        }
 
         ui.add_space(6.0);
         if self.rules_dirty {
@@ -2937,7 +2989,11 @@ impl App {
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .max_height((ui.available_height() - portrait - 118.0).max(120.0))
+            .max_height(
+                (ui.available_height()
+                    - if self.mascot_on { portrait + 118.0 } else { 96.0 })
+                .max(120.0),
+            )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(last_component(&current)).strong().size(13.5));
@@ -3056,17 +3112,30 @@ impl App {
         ui.add_space(6.0);
         ui.separator();
         ui.add_space(6.0);
-        ui.label(RichText::new("DRIVE GUIDE").size(9.5).color(pal().dim));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("DRIVE GUIDE").size(9.5).color(pal().dim));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("hide").on_hover_text("Hide the mascot").clicked() {
+                    self.mascot_on = false;
+                    save_settings(Settings {
+                        light: is_light(),
+                        mascot: false,
+                    });
+                }
+            });
+        });
         ui.add_space(4.0);
         ui.vertical_centered(|ui| {
             let art_ratio = MASCOT_W as f32 / MASCOT_H as f32;
-            let (rect, _) = ui.allocate_exact_size(
-                egui::vec2(portrait * art_ratio, portrait),
-                egui::Sense::hover(),
-            );
             let now = ctx.input(|input| input.time);
-            self.paint_mascot(ui.painter(), rect, MascotMood::Tier(guide_tier), now);
-            ui.add_space(6.0);
+            if self.mascot_on {
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(portrait * art_ratio, portrait),
+                    egui::Sense::hover(),
+                );
+                self.paint_mascot(ui.painter(), rect, MascotMood::Tier(guide_tier), now);
+                ui.add_space(6.0);
+            }
             ui.label(
                 RichText::new(&guide_headline)
                     .size(11.5)
