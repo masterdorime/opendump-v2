@@ -40,6 +40,7 @@ const MASCOT_REVIEW: &[u8] = include_bytes!("../assets/mascot_review.rgba");
 const MASCOT_SLEEP: &[u8] = include_bytes!("../assets/mascot_sleep.rgba");
 const MASCOT_WAVE: &[u8] = include_bytes!("../assets/mascot_wave.rgba");
 const MASCOT_POINT: &[u8] = include_bytes!("../assets/mascot_point.rgba");
+const MASCOT_DONE: &[u8] = include_bytes!("../assets/mascot_done.rgba");
 const MASCOT_W: usize = 191;
 const MASCOT_H: usize = 284;
 
@@ -442,6 +443,11 @@ struct App {
     mascot_sleep: Option<egui::TextureHandle>,
     mascot_wave: Option<egui::TextureHandle>,
     mascot_point: Option<egui::TextureHandle>,
+    mascot_done: Option<egui::TextureHandle>,
+    /// egui time when the last scan finished, for the 3 s "done" pose.
+    scan_done_at: Option<f64>,
+    /// `--mood <name>` forces a frame, so every state can be screenshot.
+    forced_mood: Option<String>,
     /// Seconds (egui time) until the blink ends / the next one is due.
     blink_until: f64,
     next_blink: f64,
@@ -495,6 +501,9 @@ impl App {
             mascot_sleep: None,
             mascot_wave: None,
             mascot_point: None,
+            mascot_done: None,
+            scan_done_at: None,
+            forced_mood: None,
             blink_until: 0.0,
             next_blink: 0.0,
             last_activity: 0.0,
@@ -709,7 +718,7 @@ impl App {
         });
     }
 
-    fn drain(&mut self) {
+    fn drain(&mut self, ctx: &egui::Context) {
         while let Ok(message) = self.receiver.try_recv() {
             match message {
                 Message::Started => self.scanning = true,
@@ -722,6 +731,7 @@ impl App {
                     self.map_cache = None;
                     self.progress = None;
                     self.scan_started = None;
+                    self.scan_done_at = Some(ctx.input(|input| input.time));
                 }
                 Message::Staged(items) => self.staged = items,
                 Message::Action(text) => self.toast = Some((text, Instant::now())),
@@ -1395,7 +1405,7 @@ fn install_style(ctx: &egui::Context) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.drain();
+        self.drain(ctx);
 
         // Any pointer movement or held key counts as "someone is here", which is
         // what keeps her awake.
@@ -2629,15 +2639,34 @@ impl App {
     /// Which frame to show. Blink wins because it is a 120 ms overlay on
     /// whatever state was already running.
     fn mascot_frame(&mut self, mood: MascotMood, now: f64) -> Option<egui::TextureId> {
+        if let Some(name) = self.forced_mood.clone() {
+            let handle = match name.as_str() {
+                "blink" => &self.mascot_blink,
+                "scan" => &self.mascot_scan,
+                "review" => &self.mascot_review,
+                "sleep" => &self.mascot_sleep,
+                "wave" => &self.mascot_wave,
+                "point" => &self.mascot_point,
+                "done" => &self.mascot_done,
+                _ => &self.mascot_idle,
+            };
+            return handle.as_ref().map(|texture| texture.id());
+        }
         if now >= self.next_blink {
             self.blink_until = now + 0.12;
             let jitter = (now * 0.37).fract() * 3.0;
             self.next_blink = now + 4.0 + jitter;
         }
+        let celebrating = self
+            .scan_done_at
+            .map(|at| now - at < 3.0)
+            .unwrap_or(false);
         let handle = if now < self.blink_until {
             &self.mascot_blink
         } else if self.scanning {
             &self.mascot_scan
+        } else if celebrating {
+            &self.mascot_done
         } else if now - self.last_activity > 60.0 {
             &self.mascot_sleep
         } else {
@@ -3800,6 +3829,9 @@ fn main() -> eframe::Result<()> {
             app.zoom = Some(path.clone());
         }
     }
+    if let Some(index) = argv.iter().position(|arg| arg == "--mood") {
+        app.forced_mood = argv.get(index + 1).cloned();
+    }
     if let Some(index) = argv.iter().position(|arg| arg == "--pane") {
         app.pane = match argv.get(index + 1).map(|value| value.as_str()) {
             Some("review") => Pane::Review,
@@ -3848,6 +3880,7 @@ fn main() -> eframe::Result<()> {
             app.mascot_sleep = Some(load("mascot_sleep", MASCOT_SLEEP));
             app.mascot_wave = Some(load("mascot_wave", MASCOT_WAVE));
             app.mascot_point = Some(load("mascot_point", MASCOT_POINT));
+            app.mascot_done = Some(load("mascot_done", MASCOT_DONE));
             if autoscan {
                 app.start_scan(&cc.egui_ctx);
             }

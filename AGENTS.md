@@ -105,20 +105,23 @@ cargo run --release -- --probe     # RAM/VRAM only, no scan (fast), no window
 cargo run --release -- --mascot 96               # portrait height in the guide card
 cargo run --release -- --pane quarantine         # open any pane directly
 cargo run --release -- --zoom "C:\...\npm-cache" # open the inspector on one folder
+cargo run --release -- --mood done                # force a mascot frame for a screenshot
 ```
+
+`--mood` accepts `idle · blink · scan · review · sleep · wave · point · done`.
 
 Navigation is a **left sidebar** (Map / Review / Quarantine, then Tools: Local AI, Rules); there is
 no tab row. The right rail is always present: it inspects the drive or the zoomed folder and pins
 the **mascot guide card** at its bottom. The card may only restate the matched rule's tier, size and
 reason plus one action line — same ceiling as the AI, never an invented verdict.
 
-The mascot is the disc girl: seven 191 x 284 raw-RGBA frames
-(`mascot_{idle,blink,scan,review,sleep,wave,point}`) cut from AI renders with `rembg`, given a 1 px
-ink contour so the white jacket survives the light theme, and baked into the exe. States: `wave` on
-the first-run screen, `idle` otherwise, a 120 ms blink every 4–7 s, `scan` while scanning, `review`
-when a REVIEW folder is selected, `point` when no rule matched, `sleep` after 60 s without pointer
-or key input. The assets add ~1.5 MB to the binary (8.8 MB total). `mascotdesign.md` holds the
-spec; the frames are AI-generated and not final art.
+The mascot is the disc girl: eight 191 x 284 raw-RGBA frames
+(`mascot_{idle,blink,scan,review,sleep,wave,point,done}`) cut from AI renders with `rembg`, given a
+1 px ink contour so the white jacket survives the light theme, and baked into the exe. States:
+`wave` on the first-run screen, `idle` otherwise, a 120 ms blink every 4–7 s, `scan` while scanning,
+`done` for 3 s after a scan finishes, `review` when a REVIEW folder is selected, `point` when no
+rule matched, `sleep` after 60 s without pointer or key input. The assets add ~1.7 MB to the binary
+(9.0 MB total). `mascotdesign.md` holds the spec; the frames are AI-generated and not final art.
 
 User data: `%APPDATA%\opendump-native\` — `journal.jsonl`, `quarantine\<batch>\…`. Deliberately
 separate from v1's `%APPDATA%\opendump`.

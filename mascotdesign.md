@@ -157,6 +157,7 @@ runs she is the `scan` frame with "Reading the drive…" and the current path un
 | `mascot_sleep.png` | same canvas | transparent | Built — eyes closed |
 | `mascot_wave.png` | same canvas | transparent | Built — first-run greeting |
 | `mascot_point.png` | same canvas | transparent | Built — no rule matched |
+| `mascot_done.png` | same canvas | transparent | Built — 3 s after a scan finishes |
 | `mascot_disc.png` | square, 512 px | transparent | **Not used.** Only if the platter ever spins |
 
 Rules:
