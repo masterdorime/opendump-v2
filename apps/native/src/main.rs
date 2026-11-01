@@ -1644,8 +1644,8 @@ impl App {
     }
 
     fn summary(&mut self, ui: &mut egui::Ui) {
+        // No scan: the empty state under this carries the message.
         let Some(view) = &self.scan else {
-            ui.label(RichText::new("Scan the drive to see what can be removed.").color(pal().muted));
             return;
         };
 
@@ -2103,9 +2103,56 @@ impl App {
     }
 
     /// The treemap: area is bytes, colour is safety, click zooms.
+    /// The first-run screen. Nothing to draw, so she fills it.
+    fn empty_state(&mut self, ui: &mut egui::Ui) {
+        let now = ui.input(|input| input.time);
+        let height = 280.0_f32.min(ui.available_height() - 140.0).max(120.0);
+        let width = height * MASCOT_W as f32 / MASCOT_H as f32;
+        let top_gap = ((ui.available_height() - height - 80.0) * 0.4).max(8.0);
+        ui.add_space(top_gap);
+        ui.vertical_centered(|ui| {
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+            self.paint_mascot(ui.painter(), rect, None, now);
+
+            ui.add_space(12.0);
+            if self.scanning {
+                ui.label(RichText::new("Reading the drive\u{2026}").size(13.0).color(pal().text));
+                if let Some(progress) = &self.progress {
+                    ui.label(
+                        RichText::new(clamp_label(&progress.current, 90))
+                            .size(10.5)
+                            .color(pal().dim)
+                            .monospace(),
+                    );
+                }
+            } else {
+                ui.label(RichText::new("Nothing yet.").size(13.0).color(pal().text));
+                ui.label(
+                    RichText::new(format!(
+                        "Scan {} to see what can be removed.",
+                        self.scan_root
+                    ))
+                    .size(11.0)
+                    .color(pal().muted),
+                );
+            }
+        });
+
+        let until = if now < self.blink_until {
+            self.blink_until
+        } else {
+            self.next_blink
+        };
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(
+                (until - now).clamp(0.01, 8.0),
+            ));
+    }
+
     fn map(&mut self, ui: &mut egui::Ui) {
         if self.scan.is_none() {
-            ui.label(RichText::new("Scan the drive to draw the map.").color(pal().muted));
+            self.empty_state(ui);
             return;
         }
 
@@ -2798,7 +2845,7 @@ impl App {
         let size = node.map(|node| node.size).unwrap_or(view.bytes);
         let files = node.map(|node| node.files).unwrap_or(view.files);
         let share = size as f64 / view.bytes.max(1) as f64 * 100.0;
-        let portrait = self.mascot_preview.unwrap_or(120.0);
+        let portrait = self.mascot_preview.unwrap_or(150.0);
 
         // What the rule said about the selected folder, in her voice.
         let candidate = view
@@ -2844,7 +2891,7 @@ impl App {
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .max_height((ui.available_height() - portrait - 58.0).max(120.0))
+            .max_height((ui.available_height() - portrait - 118.0).max(120.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(last_component(&current)).strong().size(13.5));
@@ -2965,31 +3012,25 @@ impl App {
         ui.add_space(6.0);
         ui.label(RichText::new("DRIVE GUIDE").size(9.5).color(pal().dim));
         ui.add_space(4.0);
-        ui.horizontal_top(|ui| {
+        ui.vertical_centered(|ui| {
             let art_ratio = MASCOT_W as f32 / MASCOT_H as f32;
-            let text_width = (ui.available_width() - portrait * art_ratio - 12.0).max(80.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(text_width, 0.0),
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| {
-                    ui.label(
-                        RichText::new(&guide_headline)
-                            .size(11.5)
-                            .strong()
-                            .color(guide_colour),
-                    );
-                    ui.add_space(2.0);
-                    ui.label(RichText::new(&guide_body).size(10.0).color(pal().muted));
-                    ui.add_space(2.0);
-                    ui.label(RichText::new(&guide_action).size(10.0).color(pal().text));
-                },
-            );
             let (rect, _) = ui.allocate_exact_size(
                 egui::vec2(portrait * art_ratio, portrait),
                 egui::Sense::hover(),
             );
             let now = ctx.input(|input| input.time);
             self.paint_mascot(ui.painter(), rect, guide_tier, now);
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(&guide_headline)
+                    .size(11.5)
+                    .strong()
+                    .color(guide_colour),
+            );
+            ui.add_space(2.0);
+            ui.label(RichText::new(&guide_body).size(10.0).color(pal().muted));
+            ui.add_space(2.0);
+            ui.label(RichText::new(&guide_action).size(10.0).color(pal().text));
             // Wake exactly when the blink ends or the next one is due, rather
             // than spinning at 8 fps forever.
             let until = if now < self.blink_until {

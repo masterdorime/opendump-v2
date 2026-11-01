@@ -133,8 +133,15 @@ the bottom**, above the window edge.
 - **Body:** the matched rule's `reason`, verbatim.
 - **Action:** one tier-appropriate line — *Safe to clear* / *Your call* / *I would keep this one* /
   *Locked, not offered*.
-- **Portrait:** 120 pt by default; `--mascot <px>` to review another size. Width is derived from
+- **Portrait:** 150 pt by default, with the copy underneath it so a large portrait does not squeeze
+  the folder list; `--mascot <px>` to review another size. Width is derived from
   `MASCOT_W / MASCOT_H` — never a literal, or she gets stretched.
+
+### 5.2 The empty screen
+
+With no scan in memory the right rail does not exist, so she owns the content area: 280 pt tall,
+centred, with "Nothing yet." and "Scan {drive} to see what can be removed." While the first scan
+runs she is the `scan` frame with "Reading the drive…" and the current path under her.
 - **Rail width:** 304 pt, already present — the card costs no layout.
 
 ## 6. Assets
