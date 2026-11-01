@@ -106,9 +106,17 @@ cargo run --release -- --mascot 96               # portrait height in the guide 
 cargo run --release -- --pane quarantine         # open any pane directly
 cargo run --release -- --zoom "C:\...\npm-cache" # open the inspector on one folder
 cargo run --release -- --mood done                # force a mascot frame for a screenshot
+cargo run --release -- --tour                     # replay the guided tour
+cargo run --release -- --no-tour                  # skip it (scripted runs)
 ```
 
 `--mood` accepts `idle · blink · scan · review · sleep · wave · point · done`.
+
+The **guided tour** runs on first launch (persisted as `tour_seen` in `settings.json`) and can be
+replayed from Rules. Six steps, each a rect recorded during layout (`top`, `nav`, `cards`, `content`,
+`rail`), dimmed with four bands around the hole because egui has no even-odd fill. The mascot narrates
+it: `wave` on the first step, `point` through the middle, `done` at the end. Enter/Space advances,
+Escape skips, and it never draws over the purge confirmation.
 
 Navigation is a **left sidebar** (Map / Review / Quarantine, then Tools: Local AI, Rules); there is
 no tab row. The right rail is always present: it inspects the drive or the zoomed folder and pins

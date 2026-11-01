@@ -187,12 +187,11 @@ GB?" on the second click. Deleting staged data is the one action with no undo.
 
 What it is not: egui's stock widgets do not match a hand-styled CSS interface pixel for pixel.
 The look is close — same palette, same rows, same tier colours — but it is a reimplementation.
-The guided tour and the cloud AI provider are still only in v0.5.
+The cloud AI provider is still only in v0.5.
 
 ## What is not here yet
 
-- **Guided tour** — v0.5's spotlight overlay
-- **Cloud AI provider** — wired, never tested against a live endpoint
+- **Cloud AI provider** - wired, never tested against a live endpoint
 - **Multi-drive staging** — v0.5 stages on any volume
 - **Elevated tier** — `hiberfil.sys`, the Windows Update cache, DISM
 - **Code signing** — the v0.1.1 binaries are unsigned, so SmartScreen warns once

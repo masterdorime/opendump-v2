@@ -248,6 +248,7 @@ fn save_overrides(disabled: &std::collections::HashSet<String>) {
 struct Settings {
     light: bool,
     mascot: bool,
+    tour_seen: bool,
 }
 
 impl Default for Settings {
@@ -255,6 +256,7 @@ impl Default for Settings {
         Self {
             light: false,
             mascot: true,
+            tour_seen: false,
         }
     }
 }
@@ -279,6 +281,10 @@ fn load_settings() -> Settings {
             .get("mascot")
             .and_then(|flag| flag.as_bool())
             .unwrap_or(true),
+        tour_seen: value
+            .get("tour_seen")
+            .and_then(|flag| flag.as_bool())
+            .unwrap_or(false),
     }
 }
 
@@ -288,7 +294,11 @@ fn save_settings(settings: Settings) {
     }
     let _ = std::fs::write(
         settings_path(),
-        serde_json::json!({ "light": settings.light, "mascot": settings.mascot })
+        serde_json::json!({
+            "light": settings.light,
+            "mascot": settings.mascot,
+            "tour_seen": settings.tour_seen,
+        })
             .to_string(),
     );
 }
@@ -425,7 +435,60 @@ struct ConfirmState {
 enum MascotMood {
     Greeting,
     Tier(Option<Tier>),
+    Celebrate,
 }
+
+struct TourStep {
+    spot: &'static str,
+    title: &'static str,
+    body: &'static str,
+    mood: MascotMood,
+}
+
+/// Six steps, anchored to rects recorded during layout. `window` means "no
+/// hole" — the whole screen dims and she does the talking.
+const TOUR_STEPS: [TourStep; 6] = [
+    TourStep {
+        spot: "window",
+        title: "Hi. I'm the one who counts.",
+        body: "opendump reads a drive, sorts every folder by how safe it is to remove, and never \
+               deletes anything without you.",
+        mood: MascotMood::Greeting,
+    },
+    TourStep {
+        spot: "nav",
+        title: "Everything lives here.",
+        body: "Map draws the drive. Review lists what can go. Quarantine holds it until you decide. \
+               Local AI reads the leftovers, and Rules decides.",
+        mood: MascotMood::Tier(None),
+    },
+    TourStep {
+        spot: "cards",
+        title: "Six numbers, one per tier.",
+        body: "Green rebuilds itself, amber is your call, blue is yours, red is locked. Click a card \
+               to filter Review.",
+        mood: MascotMood::Tier(None),
+    },
+    TourStep {
+        spot: "content",
+        title: "Area is size. Colour is safety.",
+        body: "Click a tile to zoom into it. The rail follows whatever you select.",
+        mood: MascotMood::Tier(None),
+    },
+    TourStep {
+        spot: "rail",
+        title: "I read the rule for you.",
+        body: "Select a folder and this card repeats what the rule said — tier, size, and why. \
+               When no rule matched, I say so instead of guessing.",
+        mood: MascotMood::Tier(None),
+    },
+    TourStep {
+        spot: "window",
+        title: "That's the whole tour.",
+        body: "Press Scan when you want the real numbers. I'll be here.",
+        mood: MascotMood::Celebrate,
+    },
+];
 
 struct App {
     sender: Sender<Message>,
@@ -478,6 +541,11 @@ struct App {
     forced_mood: Option<String>,
     /// Persisted: show the mascot at all.
     mascot_on: bool,
+    /// `Some(step)` while the guided tour runs.
+    tour: Option<usize>,
+    tour_seen: bool,
+    /// Panel rects recorded each frame, so tour steps can point at them.
+    spots: std::collections::HashMap<&'static str, egui::Rect>,
     /// Seconds (egui time) until the blink ends / the next one is due.
     blink_until: f64,
     next_blink: f64,
@@ -536,6 +604,9 @@ impl App {
             scan_done_at: None,
             forced_mood: None,
             mascot_on: settings.mascot,
+            tour: if settings.tour_seen { None } else { Some(0) },
+            tour_seen: settings.tour_seen,
+            spots: Default::default(),
             blink_until: 0.0,
             next_blink: 0.0,
             last_activity: 0.0,
@@ -1485,7 +1556,7 @@ impl eframe::App for App {
         visuals.widgets.active.bg_stroke = egui::Stroke::NONE;
         ctx.set_visuals(visuals);
 
-        egui::TopBottomPanel::top("bar")
+        let top = egui::TopBottomPanel::top("bar")
             .frame(egui::Frame::none().fill(pal().panel).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -1566,6 +1637,7 @@ impl eframe::App for App {
                             save_settings(Settings {
                                 light,
                                 mascot: self.mascot_on,
+                                tour_seen: self.tour_seen,
                             });
                             std::thread::spawn(apply_title_bar_theme);
                         }
@@ -1590,9 +1662,10 @@ impl eframe::App for App {
                     self.scan_progress_bar(ui);
                 }
             });
+        self.spots.insert("top", top.response.rect);
 
         if self.scan.is_some() {
-            egui::SidePanel::right("inspector")
+            let rail = egui::SidePanel::right("inspector")
                 .exact_width(304.0)
                 .resizable(false)
                 .frame(
@@ -1601,24 +1674,31 @@ impl eframe::App for App {
                         .inner_margin(egui::Margin::symmetric(14.0, 12.0)),
                 )
                 .show(ctx, |ui| self.inspector(ui, ctx));
+            self.spots.insert("rail", rail.response.rect);
         }
 
         // Navigation is the sidebar now; nothing above the content.
         self.sidebar(ctx);
 
-        egui::CentralPanel::default()
+        let central = egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(pal().bg).inner_margin(egui::Margin::symmetric(16.0, 12.0)))
             .show(ctx, |ui| {
-                self.summary(ui);
+                let cards = ui.scope(|ui| self.summary(ui)).response.rect;
+                self.spots.insert("cards", cards);
                 ui.add_space(10.0);
-                match self.pane {
-                    Pane::Map => self.map(ui),
-                    Pane::Review => self.review(ui, ctx),
-                    Pane::Quarantine => self.quarantine_panel(ui, ctx),
-                    Pane::Ai => self.ai_pane(ui, ctx),
-                    Pane::Rules => self.rules_pane(ui, ctx),
-                }
+                let content = ui
+                    .scope(|ui| match self.pane {
+                        Pane::Map => self.map(ui),
+                        Pane::Review => self.review(ui, ctx),
+                        Pane::Quarantine => self.quarantine_panel(ui, ctx),
+                        Pane::Ai => self.ai_pane(ui, ctx),
+                        Pane::Rules => self.rules_pane(ui, ctx),
+                    })
+                    .response
+                    .rect;
+                self.spots.insert("content", content);
             });
+        self.spots.insert("central", central.response.rect);
 
         self.confirm_modal(ctx);
 
@@ -1635,8 +1715,8 @@ impl eframe::App for App {
             }
         }
 
-        // Last, so she sits above every panel.
-        
+        // Last, so it sits above every panel.
+        self.tour_overlay(ctx);
     }
 }
 
@@ -1654,7 +1734,7 @@ impl App {
             .filter(|item| item.status == "quarantined")
             .count();
 
-        egui::SidePanel::left("nav")
+        let nav = egui::SidePanel::left("nav")
             .exact_width(196.0)
             .resizable(false)
             .frame(
@@ -1700,6 +1780,7 @@ impl App {
                     );
                 });
             });
+        self.spots.insert("nav", nav.response.rect);
     }
 
     fn summary(&mut self, ui: &mut egui::Ui) {
@@ -2170,7 +2251,7 @@ impl App {
         let top_gap = ((ui.available_height() - height - 80.0) * 0.4).max(8.0);
         ui.add_space(top_gap);
         ui.vertical_centered(|ui| {
-            if self.mascot_on {
+            if self.mascot_on && self.tour.is_none() {
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
                 self.paint_mascot(ui.painter(), rect, MascotMood::Greeting, now);
@@ -2708,6 +2789,7 @@ impl App {
         } else {
             match mood {
                 MascotMood::Greeting => &self.mascot_wave,
+                MascotMood::Celebrate => &self.mascot_done,
                 MascotMood::Tier(Some(Tier::Review)) => &self.mascot_review,
                 MascotMood::Tier(None) => &self.mascot_point,
                 MascotMood::Tier(_) => &self.mascot_idle,
@@ -2769,6 +2851,172 @@ impl App {
         );
     }
 
+    /// The guided tour. Six steps, each pointing at a rect recorded during the
+    /// last layout pass, with the mascot doing the talking.
+    fn tour_overlay(&mut self, ctx: &egui::Context) {
+        let Some(index) = self.tour else {
+            return;
+        };
+        // The delete dialog always wins; a tour over it would be grotesque.
+        if self.confirm.is_some() {
+            return;
+        }
+        let index = index.min(TOUR_STEPS.len() - 1);
+        let spec = &TOUR_STEPS[index];
+        let screen = ctx.screen_rect();
+        let target = if spec.spot == "window" {
+            None
+        } else {
+            self.spots.get(spec.spot).copied()
+        };
+
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::new("tour-dim"),
+        ));
+        let dim = Color32::from_black_alpha(176);
+        match target {
+            Some(rect) => {
+                // egui has no even-odd fill: paint the four bands around the hole.
+                painter.rect_filled(
+                    egui::Rect::from_min_max(screen.min, egui::pos2(screen.right(), rect.top())),
+                    0.0,
+                    dim,
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_max(egui::pos2(screen.left(), rect.bottom()), screen.max),
+                    0.0,
+                    dim,
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(screen.left(), rect.top()),
+                        egui::pos2(rect.left(), rect.bottom()),
+                    ),
+                    0.0,
+                    dim,
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.right(), rect.top()),
+                        egui::pos2(screen.right(), rect.bottom()),
+                    ),
+                    0.0,
+                    dim,
+                );
+                painter.rect_stroke(
+                    rect.expand(2.0),
+                    7.0,
+                    egui::Stroke::new(1.5_f32, pal().accent),
+                );
+            }
+            None => {
+                painter.rect_filled(screen, 0.0, dim);
+            }
+        }
+
+        // Swallow clicks on the dimmed area, so the tour cannot drive the app.
+        egui::Area::new(egui::Id::new("tour-block"))
+            .fixed_pos(screen.min)
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                ui.allocate_response(screen.size(), egui::Sense::click());
+            });
+
+        let mut advance = false;
+        let mut skip = false;
+        let last = index + 1 == TOUR_STEPS.len();
+        let now = ctx.input(|input| input.time);
+        if ctx.input(|input| {
+            input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Space)
+        }) {
+            advance = true;
+        }
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            skip = true;
+        }
+
+        egui::Window::new("tour-card")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -26.0])
+            .order(egui::Order::Foreground)
+            .frame(
+                egui::Frame::none()
+                    .fill(pal().panel)
+                    .stroke(egui::Stroke::new(1.0_f32, pal().line))
+                    .rounding(egui::Rounding::same(10.0))
+                    .inner_margin(egui::Margin::same(18.0)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(560.0);
+                ui.horizontal_top(|ui| {
+                    if self.mascot_on {
+                        let art_ratio = MASCOT_W as f32 / MASCOT_H as f32;
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(96.0 * art_ratio, 96.0),
+                            egui::Sense::hover(),
+                        );
+                        self.paint_mascot(ui.painter(), rect, spec.mood, now);
+                        ui.add_space(14.0);
+                    }
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(spec.title).strong().size(15.0));
+                        ui.add_space(5.0);
+                        ui.label(RichText::new(spec.body).size(11.5).color(pal().muted));
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{} / {}", index + 1, TOUR_STEPS.len()))
+                                    .size(10.0)
+                                    .color(pal().dim),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let next = egui::Button::new(
+                                        RichText::new(if last { "Done" } else { "Next" })
+                                            .color(pal().on_accent)
+                                            .strong(),
+                                    )
+                                    .fill(pal().accent)
+                                    .rounding(egui::Rounding::same(7.0));
+                                    if ui.add(next).clicked() {
+                                        advance = true;
+                                    }
+                                    if ui.button("Skip").clicked() {
+                                        skip = true;
+                                    }
+                                },
+                            );
+                        });
+                    });
+                });
+            });
+
+        if skip {
+            self.end_tour();
+        } else if advance {
+            if last {
+                self.end_tour();
+            } else {
+                self.tour = Some(index + 1);
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn end_tour(&mut self) {
+        self.tour = None;
+        self.tour_seen = true;
+        save_settings(Settings {
+            light: is_light(),
+            mascot: self.mascot_on,
+            tour_seen: true,
+        });
+    }
+
     fn rules_pane(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let compiled = rules();
 
@@ -2814,7 +3062,13 @@ impl App {
             save_settings(Settings {
                 light: is_light(),
                 mascot: mascot_on,
+                tour_seen: self.tour_seen,
             });
+        }
+
+        ui.add_space(2.0);
+        if ui.button(RichText::new("Show the tour").size(10.5)).clicked() {
+            self.tour = Some(0);
         }
 
         ui.add_space(6.0);
@@ -3120,6 +3374,7 @@ impl App {
                     save_settings(Settings {
                         light: is_light(),
                         mascot: false,
+                        tour_seen: self.tour_seen,
                     });
                 }
             });
@@ -3128,7 +3383,7 @@ impl App {
         ui.vertical_centered(|ui| {
             let art_ratio = MASCOT_W as f32 / MASCOT_H as f32;
             let now = ctx.input(|input| input.time);
-            if self.mascot_on {
+            if self.mascot_on && self.tour.is_none() {
                 let (rect, _) = ui.allocate_exact_size(
                     egui::vec2(portrait * art_ratio, portrait),
                     egui::Sense::hover(),
@@ -3900,6 +4155,13 @@ fn main() -> eframe::Result<()> {
     }
     if let Some(index) = argv.iter().position(|arg| arg == "--mood") {
         app.forced_mood = argv.get(index + 1).cloned();
+    }
+    if argv.iter().any(|arg| arg == "--no-tour") {
+        app.tour = None;
+        app.tour_seen = true;
+    }
+    if argv.iter().any(|arg| arg == "--tour") {
+        app.tour = Some(0);
     }
     if let Some(index) = argv.iter().position(|arg| arg == "--pane") {
         app.pane = match argv.get(index + 1).map(|value| value.as_str()) {
