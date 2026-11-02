@@ -255,7 +255,7 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            light: false,
+            light: true,
             mascot: true,
             tour_seen: false,
             tour_step: 0,
@@ -278,7 +278,7 @@ fn load_settings() -> Settings {
         light: value
             .get("light")
             .and_then(|flag| flag.as_bool())
-            .unwrap_or(false),
+            .unwrap_or(true),
         mascot: value
             .get("mascot")
             .and_then(|flag| flag.as_bool())
@@ -618,7 +618,7 @@ struct App {
 }
 
 impl App {
-    fn new(sender: Sender<Message>, receiver: Receiver<Message>) -> Self {
+    fn new(sender: Sender<Message>, receiver: Receiver<Message>, open_cache: bool) -> Self {
         let settings = load_settings();
         set_light(settings.light);
 
@@ -676,10 +676,13 @@ impl App {
             mascot_preview: None,
         };
 
-        // Open to the last map when the cache was written by these rules.
-        if let Some(cached) = cache::load(&cache_path(), rules_fingerprint()) {
-            app.space = hardware::disk_space(&app.scan_root);
-            app.scan = Some(view_from_cache(cached));
+        // Open to the last map when the cache was written by these rules —
+        // unless this run asked for a clean start.
+        if open_cache {
+            if let Some(cached) = cache::load(&cache_path(), rules_fingerprint()) {
+                app.space = hardware::disk_space(&app.scan_root);
+                app.scan = Some(view_from_cache(cached));
+            }
         }
 
         app
@@ -4326,9 +4329,10 @@ fn main() -> eframe::Result<()> {
     std::thread::spawn(apply_title_bar_theme);
 
     let (sender, receiver) = channel();
-    let mut app = App::new(sender, receiver);
-    let autoscan = std::env::args().any(|arg| arg == "--scan");
     let argv: Vec<String> = std::env::args().collect();
+    let fresh = argv.iter().any(|arg| arg == "--fresh");
+    let mut app = App::new(sender, receiver, !fresh);
+    let autoscan = std::env::args().any(|arg| arg == "--scan");
     if let Some(index) = argv.iter().position(|arg| arg == "--mascot") {
         if let Some(size) = argv.get(index + 1).and_then(|value| value.parse::<f32>().ok()) {
             app.mascot_preview = Some(size.clamp(48.0, 480.0));
