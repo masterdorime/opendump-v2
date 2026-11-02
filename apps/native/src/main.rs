@@ -2340,7 +2340,7 @@ impl App {
         let top_gap = ((ui.available_height() - height - 80.0) * 0.4).max(8.0);
         ui.add_space(top_gap);
         ui.vertical_centered(|ui| {
-            if self.mascot_on && self.tour.is_none() {
+            if self.mascot_on {
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
                 self.paint_mascot(ui.painter(), rect, MascotMood::Greeting, now, false);
@@ -3104,8 +3104,11 @@ impl App {
                     .inner_margin(egui::Margin::same(14.0))
                     .show(ui, |ui| {
                         ui.set_width(bubble_w - 28.0);
+                        // One of her at a time: on the empty screen she is the big
+                        // waving figure behind the dim, so the bubble is text only.
+                        let bubble_portrait = self.mascot_on && self.scan.is_some();
                         ui.horizontal_top(|ui| {
-                            if self.mascot_on && on_left {
+                            if bubble_portrait && on_left {
                                 self.tour_portrait(ui, 96.0, mood, now, true);
                                 ui.add_space(12.0);
                             }
@@ -3146,7 +3149,7 @@ impl App {
                                     );
                                 });
                             });
-                            if self.mascot_on && !on_left {
+                            if bubble_portrait && !on_left {
                                 ui.add_space(12.0);
                                 self.tour_portrait(ui, 96.0, mood, now, false);
                             }
