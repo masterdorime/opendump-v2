@@ -192,8 +192,12 @@ The cloud AI provider is still only in v0.5.
 ## What is not here yet
 
 - **Cloud AI provider** - wired, never tested against a live endpoint
-- **Elevated tier** - `hiberfil.sys`, the Windows Update cache, DISM
 - **Code signing** — the v0.1.1 binaries are unsigned, so SmartScreen warns once
+
+**Deliberately not planned:** removing `hiberfil.sys`, `pagefile.sys`, the Windows Update cache or
+`WinSxS`. They are reported as `LOCKED` but never touched — none of them can be deleted, only changed
+through `powercfg`, System Properties, a stopped service or `DISM`, so there is no undo and no
+quarantine to put them in.
 
 The engine is complete enough to scan, classify, quarantine, restore and purge from either a
 terminal or a window.

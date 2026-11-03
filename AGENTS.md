@@ -211,7 +211,14 @@ copy, everything else dimmed. In egui the dim is a `layer_painter` fill plus a h
 trap 3 above, an `Area`'s painter is clipped to its own content.
 
 Then: cloud AI provider (wired in v1, never tested live — test before porting), Exclude from Scan
-(needs the scanner to take a list and the cache to invalidate on it), elevated tier.
+(needs the scanner to take a list and the cache to invalidate on it).
+
+**Decided against: the elevated tier.** `hiberfil.sys`, `pagefile.sys`, the Windows Update cache and
+`WinSxS` are reported (`LOCKED`, 46.4 GB on this machine) but will never be removed from here. None of
+them can be deleted — they are `powercfg`, System Properties, a stopped service and `DISM` — so there
+is no quarantine, no journal and no undo, which breaks the one invariant the app is built on. On this
+machine the reclaimable total would have been ~0 GB anyway (hibernation off, pagefile absent, update
+cache already clean). Do not build it without a product reason stronger than completeness.
 
 **Shipped in v2:** exclude-from-scan (`scan_any_with`, `exclusions_hash` in the cache key, managed in
 Rules) and multi-drive staging (`stage_root_for` — an item from another volume is staged at
