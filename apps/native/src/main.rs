@@ -642,6 +642,10 @@ struct App {
     tour_seen: bool,
     /// Set for ~1.2 s when a step's action lands, before the next one appears.
     tour_celebrate: Option<f64>,
+    /// The eased spotlight, so the hole travels between controls.
+    tour_shown: Option<egui::Rect>,
+    /// The eased bubble position, so it travels with the hole.
+    tour_bubble_at: Option<egui::Pos2>,
     /// Panel rects recorded each frame, so tour steps can point at them.
     spots: std::collections::HashMap<&'static str, egui::Rect>,
     /// Seconds (egui time) until the blink ends / the next one is due.
@@ -706,6 +710,8 @@ impl App {
             tour: if settings.tour_seen { None } else { Some(0) },
             tour_seen: settings.tour_seen,
             tour_celebrate: None,
+            tour_shown: None,
+            tour_bubble_at: None,
             spots: Default::default(),
             blink_until: 0.0,
             next_blink: 0.0,
@@ -3050,24 +3056,22 @@ impl App {
             self.spots.get(spec.spot).copied()
         };
 
+        // The spotlight glides toward the next control instead of snapping, so a
+        // step change reads as a camera move rather than a flicker.
+        let shown = match (self.tour_shown, target) {
+            (Some(previous), Some(next)) => Some(ease_rect(previous, next, 0.22)),
+            (None, Some(next)) => Some(next),
+            (_, None) => None,
+        };
+        self.tour_shown = shown;
+
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Middle,
             egui::Id::new("tour-dim"),
         ));
-        let dim = Color32::from_black_alpha(150);
-        let bands = match target {
-            Some(rect) => [
-                egui::Rect::from_min_max(screen.min, egui::pos2(screen.right(), rect.top())),
-                egui::Rect::from_min_max(egui::pos2(screen.left(), rect.bottom()), screen.max),
-                egui::Rect::from_min_max(
-                    egui::pos2(screen.left(), rect.top()),
-                    egui::pos2(rect.left(), rect.bottom()),
-                ),
-                egui::Rect::from_min_max(
-                    egui::pos2(rect.right(), rect.top()),
-                    egui::pos2(screen.right(), rect.bottom()),
-                ),
-            ],
+        let dim = Color32::from_black_alpha(168);
+        let bands = match shown {
+            Some(rect) => bands_around(screen, rect),
             None => [screen; 4],
         };
         for band in bands {
@@ -3075,10 +3079,19 @@ impl App {
                 painter.rect_filled(band, 0.0, dim);
             }
         }
-        if let Some(rect) = target {
+        if let Some(rect) = shown {
+            // A soft outer glow under the hard ring: focus, not a box.
             painter.rect_stroke(
-                rect.expand(3.0),
-                8.0,
+                rect.expand(8.0),
+                12.0,
+                egui::Stroke::new(
+                    6.0_f32,
+                    Color32::from_rgba_unmultiplied(224, 43, 60, 28),
+                ),
+            );
+            painter.rect_stroke(
+                rect.expand(2.5),
+                9.0,
                 egui::Stroke::new(1.5_f32, pal().accent),
             );
             // Blocking bands, so the only live control is the one highlighted.
@@ -3102,9 +3115,9 @@ impl App {
                 });
         }
 
-        let bubble_w = 470.0_f32;
-        let bubble_h = 176.0_f32;
-        let (mut bx, mut by) = match target {
+        let bubble_w = 500.0_f32;
+        let bubble_h = 192.0_f32;
+        let (mut bx, mut by) = match shown {
             Some(t) => {
                 let below = t.bottom() + 16.0;
                 if below + bubble_h < screen.bottom() - 10.0 {
@@ -3122,7 +3135,15 @@ impl App {
         };
         bx = bx.clamp(10.0, (screen.right() - bubble_w - 10.0).max(10.0));
         by = by.clamp(10.0, (screen.bottom() - bubble_h - 10.0).max(10.0));
-        let on_left = target
+        // Same easing for the bubble, so the whole thing reads as one camera move.
+        let wanted = egui::pos2(bx, by);
+        let at = self
+            .tour_bubble_at
+            .map(|previous| previous + (wanted - previous) * 0.25)
+            .unwrap_or(wanted);
+        self.tour_bubble_at = Some(at);
+        let (bx, by) = (at.x, at.y);
+        let on_left = shown
             .map(|t| t.center().x < bx + bubble_w * 0.5)
             .unwrap_or(true);
 
@@ -3138,27 +3159,27 @@ impl App {
                         1.0_f32,
                         mix(pal().accent, pal().line, 0.55),
                     ))
-                    .rounding(egui::Rounding::same(10.0))
-                    .inner_margin(egui::Margin::same(14.0))
+                    .rounding(egui::Rounding::same(12.0))
+                    .inner_margin(egui::Margin::same(16.0))
                     .show(ui, |ui| {
-                        ui.set_width(bubble_w - 28.0);
+                        ui.set_width(bubble_w - 32.0);
                         // One of her at a time: on the empty screen she is the big
                         // waving figure behind the dim, so the bubble is text only.
                         let bubble_portrait = self.mascot_on && self.scan.is_some();
                         ui.horizontal_top(|ui| {
                             if bubble_portrait && on_left {
-                                self.tour_portrait(ui, 96.0, mood, now, true);
-                                ui.add_space(12.0);
+                                self.tour_portrait(ui, 88.0, mood, now, true);
+                                ui.add_space(14.0);
                             }
                             ui.vertical(|ui| {
-                                ui.label(RichText::new(title).strong().size(14.0));
-                                ui.add_space(4.0);
-                                ui.label(RichText::new(body).size(11.0).color(pal().muted));
-                                ui.add_space(10.0);
+                                ui.label(RichText::new(title).strong().size(15.0));
+                                ui.add_space(6.0);
+                                ui.label(RichText::new(body).size(11.5).color(pal().muted));
+                                ui.add_space(14.0);
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         RichText::new(format!(
-                                            "{} / {}",
+                                            "{} of {}",
                                             index + 1,
                                             TOUR_STEPS.len()
                                         ))
@@ -3188,8 +3209,8 @@ impl App {
                                 });
                             });
                             if bubble_portrait && !on_left {
-                                ui.add_space(12.0);
-                                self.tour_portrait(ui, 96.0, mood, now, false);
+                                ui.add_space(14.0);
+                                self.tour_portrait(ui, 88.0, mood, now, false);
                             }
                         });
                     });
@@ -3989,6 +4010,31 @@ fn draw_inspection(ui: &mut egui::Ui, detail: &FolderDetail) {
 
 /// One summary cell. Equal width comes from `columns`, not from guessing a
 /// pixel width: the row then shares the map's left and right edges.
+/// Ease a rect toward another one; `t` is the fraction left to travel per frame.
+fn ease_rect(from: egui::Rect, to: egui::Rect, t: f32) -> egui::Rect {
+    let mix = |a: f32, b: f32| a + (b - a) * t;
+    egui::Rect::from_min_max(
+        egui::pos2(mix(from.min.x, to.min.x), mix(from.min.y, to.min.y)),
+        egui::pos2(mix(from.max.x, to.max.x), mix(from.max.y, to.max.y)),
+    )
+}
+
+/// The four bands of a screen that are outside `hole`.
+fn bands_around(screen: egui::Rect, hole: egui::Rect) -> [egui::Rect; 4] {
+    [
+        egui::Rect::from_min_max(screen.min, egui::pos2(screen.right(), hole.top())),
+        egui::Rect::from_min_max(egui::pos2(screen.left(), hole.bottom()), screen.max),
+        egui::Rect::from_min_max(
+            egui::pos2(screen.left(), hole.top()),
+            egui::pos2(hole.left(), hole.bottom()),
+        ),
+        egui::Rect::from_min_max(
+            egui::pos2(hole.right(), hole.top()),
+            egui::pos2(screen.right(), hole.bottom()),
+        ),
+    ]
+}
+
 fn summary_card(ui: &mut egui::Ui, label: &str, value: &str, sub: &str, colour: Color32) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 76.0), egui::Sense::click());

@@ -118,8 +118,10 @@ checkbox, Quarantine selected, Restore all — and advances only when the app se
 (`scan.is_some()`, `zoom.is_some()`, `picked` non-empty, and so on). The highlighted control stays
 clickable and the four bands around it block everything else, so the hole is the only live target.
 The mascot pops up in a bubble anchored to that control, mirrored when the target is on her left
-(UV swap, no extra asset), and holds `done` for 1.2 s when a step lands. Escape skips; the tour never
-asks for a purge, and it never draws over the purge confirmation.
+(UV swap, no extra asset), and holds `done` for 1.2 s when a step lands. The spotlight rect and the
+bubble both ease toward their next position each frame (0.22 / 0.25), so a step change reads as a
+camera move rather than a cut. Escape skips; the tour never asks for a purge, and it never draws over
+the purge confirmation.
 
 Navigation is a **left sidebar** (Map / Review / Quarantine, then Tools: Local AI, Rules); there is
 no tab row. The right rail is always present: it inspects the drive or the zoomed folder and pins
