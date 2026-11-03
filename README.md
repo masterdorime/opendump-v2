@@ -192,8 +192,7 @@ The cloud AI provider is still only in v0.5.
 ## What is not here yet
 
 - **Cloud AI provider** - wired, never tested against a live endpoint
-- **Multi-drive staging** — v0.5 stages on any volume
-- **Elevated tier** — `hiberfil.sys`, the Windows Update cache, DISM
+- **Elevated tier** - `hiberfil.sys`, the Windows Update cache, DISM
 - **Code signing** — the v0.1.1 binaries are unsigned, so SmartScreen warns once
 
 The engine is complete enough to scan, classify, quarantine, restore and purge from either a

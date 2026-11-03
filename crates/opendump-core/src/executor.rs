@@ -154,9 +154,13 @@ pub fn quarantine(items: &[ExecItem], options: &ExecOptions) -> std::io::Result<
         .map(|(index, item)| Planned {
             id: format!("{}-{index}", now_nanos().unwrap_or(0)),
             src: item.path.clone(),
-            dst: staged_path_for(&options.quarantine_root, &batch, &item.path)
-                .to_string_lossy()
-                .to_string(),
+            dst: staged_path_for(
+                &stage_root_for(&item.path, &options.quarantine_root),
+                &batch,
+                &item.path,
+            )
+            .to_string_lossy()
+            .to_string(),
             bytes: item.size,
         })
         .collect();
@@ -204,7 +208,10 @@ pub fn quarantine(items: &[ExecItem], options: &ExecOptions) -> std::io::Result<
             continue;
         }
 
-        if is_inside(&item.path, &options.quarantine_root.to_string_lossy()) {
+        let stage_root = stage_root_for(&item.path, &options.quarantine_root);
+        if is_inside(&item.path, &options.quarantine_root.to_string_lossy())
+            || is_inside(&item.path, &stage_root.to_string_lossy())
+        {
             result.status = ExecStatus::Refused;
             result.reason = Some("path is inside the quarantine folder".into());
             results.push(result);
@@ -212,8 +219,8 @@ pub fn quarantine(items: &[ExecItem], options: &ExecOptions) -> std::io::Result<
         }
 
         let source_root = volume_root(&item.path);
-        let destination_root = volume_root(&options.quarantine_root.to_string_lossy());
-        if source_root.to_lowercase() != destination_root.to_lowercase() {
+        let destination_root = volume_root(&stage_root.to_string_lossy());
+        if source_root != destination_root {
             result.status = ExecStatus::Refused;
             result.reason = Some(format!(
                 "quarantine is on {destination_root} but this item is on {source_root}; \
@@ -648,6 +655,22 @@ pub fn purge(ids: &[String], journal_path: &Path) -> std::io::Result<BatchResult
 
 /// Mirror the original absolute path beneath the batch folder, drive included,
 /// so a restore is a mechanical reverse mapping.
+/// Where a folder from this volume can be staged.
+///
+/// A move must be a rename, so the quarantine has to live on the source's own
+/// volume. The configured root is used when the volumes match; otherwise the
+/// item goes to `<volume>:\DriveSizeAuditQuarantine`, which is the same rule
+/// v1 used and the only one that keeps the move instant.
+pub fn stage_root_for(source: &str, configured: &Path) -> PathBuf {
+    let source_volume = volume_root(source);
+    let configured_volume = volume_root(&configured.to_string_lossy());
+    if source_volume.is_empty() || source_volume.eq_ignore_ascii_case(&configured_volume) {
+        configured.to_path_buf()
+    } else {
+        PathBuf::from(format!("{}DriveSizeAuditQuarantine", source_volume))
+    }
+}
+
 pub fn staged_path_for(quarantine_root: &Path, batch: &str, src: &str) -> PathBuf {
     let (drive, rest) = split_drive(src);
     let mut path = quarantine_root.join(batch);

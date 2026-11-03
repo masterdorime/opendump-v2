@@ -22,6 +22,34 @@ fn options(root: &Path) -> ExecOptions {
     }
 }
 
+#[test]
+fn a_second_volume_stages_on_its_own_drive() {
+    let configured = Path::new(r"C:\Users\someone\AppData\Roaming\opendump-native\quarantine");
+
+    // Same volume: the configured root is used.
+    assert_eq!(
+        opendump_core::stage_root_for(r"C:\Users\someone\AppData\Local\Temp\x", configured),
+        configured.to_path_buf()
+    );
+
+    // Different volume: quarantine has to live on that volume, or the move
+    // would copy instead of rename.
+    assert_eq!(
+        opendump_core::stage_root_for(r"D:\Games\Cache", configured),
+        PathBuf::from(r"D:\DriveSizeAuditQuarantine")
+    );
+    assert_eq!(
+        opendump_core::stage_root_for(r"e:\backups\old", configured),
+        PathBuf::from(r"E:\DriveSizeAuditQuarantine")
+    );
+
+    // A relative path has no volume, so it keeps the configured root.
+    assert_eq!(
+        opendump_core::stage_root_for(r"relative\path", configured),
+        configured.to_path_buf()
+    );
+}
+
 fn make_folder(root: &Path, relative: &str, file: &str, body: &str) -> String {
     let path = root.join(relative);
     fs::create_dir_all(&path).expect("create folder");
@@ -96,28 +124,6 @@ fn a_path_inside_the_quarantine_is_refused() {
 
     assert_eq!(result.items[0].status, ExecStatus::Refused);
     assert!(Path::new(&inside).exists());
-
-    fs::remove_dir_all(&root).expect("cleanup");
-}
-
-#[test]
-fn a_cross_volume_move_is_refused() {
-    let root = workspace("refuse-volume");
-    let target = make_folder(&root, "data/cache", "a.bin", "x");
-
-    let mut opts = options(&root);
-    opts.quarantine_root = PathBuf::from("Z:\\elsewhere");
-    opts.batch_id = Some("b1".into());
-
-    let result = quarantine(&[item(&target, Tier::SafePurge)], &opts).expect("quarantine");
-
-    assert_eq!(result.items[0].status, ExecStatus::Refused);
-    assert!(result.items[0]
-        .reason
-        .as_deref()
-        .unwrap_or_default()
-        .contains("cross-volume"));
-    assert!(Path::new(&target).exists());
 
     fs::remove_dir_all(&root).expect("cleanup");
 }

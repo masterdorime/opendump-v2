@@ -26,7 +26,8 @@ pub mod tokens;
 pub mod types;
 
 pub use executor::{
-    inspect_staged, list_quarantine, purge, quarantine, restore, staged_path_for, BatchResult,
+    inspect_staged, list_quarantine, purge, quarantine, restore, stage_root_for,
+    staged_path_for, BatchResult,
     ExecItem, ExecOptions, ExecResult, ExecStatus, QuarantineItem, QuarantineStatus, StagedDetail,
 };
 pub use ai::{classify, models, parse_verdicts, reachable, AiTier, ClassifyItem, Verdict};
