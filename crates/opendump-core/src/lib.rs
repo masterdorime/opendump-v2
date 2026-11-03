@@ -30,7 +30,7 @@ pub use executor::{
     ExecItem, ExecOptions, ExecResult, ExecStatus, QuarantineItem, QuarantineStatus, StagedDetail,
 };
 pub use ai::{classify, models, parse_verdicts, reachable, AiTier, ClassifyItem, Verdict};
-pub use cache::{CachedNode, CachedScan};
+pub use cache::{exclusions_hash, rules_hash, CachedNode, CachedScan};
 pub use format::{bytes, thousands};
 pub use hardware::{Gpu, Memory};
 pub use inspect::{inspect_folder, FolderDetail};
@@ -40,6 +40,9 @@ pub use rules::{
     apply_overrides, compile, depth_of, find_candidates, find_unclassified, match_rule, parent_of,
     Candidate, CompiledRule, Overrides, UnclassifiedDir,
 };
-pub use scan::{is_drive_root, scan, scan_any, scan_with_progress, ScanProgress, ScanReport};
+pub use scan::{
+    is_drive_root, is_excluded, scan, scan_any, scan_any_with, scan_with_exclusions,
+    scan_with_progress, ScanProgress, ScanReport,
+};
 pub use tokens::{default_tokens, expand, TokenMap};
 pub use types::{DirEntry, Rule, RuleMatch, Tier};

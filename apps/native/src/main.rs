@@ -17,7 +17,8 @@ use serde::Deserialize;
 use opendump_core::{
     ai, apply_overrides, bytes, cache, compile, default_tokens, find_candidates, hardware, inspect_folder,
     inspect_staged,
-    list_quarantine, match_rule, mft, parent_of, purge, quarantine, restore, scan, scan_any,
+    list_quarantine, match_rule, mft, parent_of, purge, quarantine, restore, scan, scan_any_with,
+    is_drive_root,
 
     squarify, thousands, AiTier, Box4, CachedNode, CachedScan, Candidate, ClassifyItem, CompiledRule,
     DirEntry, FolderDetail, Overrides,
@@ -315,8 +316,41 @@ fn cache_path() -> PathBuf {
 }
 
 /// Invalidate the cache whenever the rules that produced it change.
-fn rules_fingerprint() -> u64 {
+fn rules_fingerprint(exclusions: &[String]) -> u64 {
+    // Exclusions are part of the key: a scan that skipped different folders is
+    // not the same scan, so the cache must not answer for it.
     cache::rules_hash(RULES_JSON)
+        .wrapping_mul(31)
+        .wrapping_add(cache::exclusions_hash(exclusions))
+}
+
+fn exclusions_path() -> PathBuf {
+    base_dir().join("exclusions.json")
+}
+
+fn load_exclusions() -> Vec<String> {
+    std::fs::read_to_string(exclusions_path())
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| {
+            value.get("paths").and_then(|paths| paths.as_array()).map(|paths| {
+                paths
+                    .iter()
+                    .filter_map(|path| path.as_str().map(|text| text.to_string()))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn save_exclusions(paths: &[String]) {
+    if let Some(parent) = exclusions_path().parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(
+        exclusions_path(),
+        serde_json::json!({ "paths": paths }).to_string(),
+    );
 }
 
 /// Rebuild the view the window expects from a cache written by another run.
@@ -601,6 +635,8 @@ struct App {
     forced_mood: Option<String>,
     /// Persisted: show the mascot at all.
     mascot_on: bool,
+    /// Folders the scan skips entirely; changing them invalidates the cache.
+    exclusions: Vec<String>,
     /// `Some(step)` while the guided tour runs.
     tour: Option<usize>,
     tour_seen: bool,
@@ -666,6 +702,7 @@ impl App {
             scan_done_at: None,
             forced_mood: None,
             mascot_on: settings.mascot,
+            exclusions: load_exclusions(),
             tour: if settings.tour_seen { None } else { Some(0) },
             tour_seen: settings.tour_seen,
             tour_celebrate: None,
@@ -679,7 +716,7 @@ impl App {
         // Open to the last map when the cache was written by these rules —
         // unless this run asked for a clean start.
         if open_cache {
-            if let Some(cached) = cache::load(&cache_path(), rules_fingerprint()) {
+            if let Some(cached) = cache::load(&cache_path(), rules_fingerprint(&app.exclusions)) {
                 app.space = hardware::disk_space(&app.scan_root);
                 app.scan = Some(view_from_cache(cached));
             }
@@ -697,12 +734,13 @@ impl App {
         self.scan_started = Some(Instant::now());
         let sender = self.sender.clone();
         let root = self.scan_root.clone();
+        let exclusions = self.exclusions.clone();
         let ctx = ctx.clone();
 
         std::thread::spawn(move || {
             let _ = sender.send(Message::Started);
             let started = Instant::now();
-            let report = scan_any(Path::new(&root), |progress| {
+            let report = scan_any_with(Path::new(&root), &exclusions, |progress| {
                 let _ = sender.send(Message::Progress(progress));
                 ctx.request_repaint();
             });
@@ -776,7 +814,7 @@ impl App {
                     .collect(),
                 candidates: candidates.clone(),
             };
-            let _ = cache::save(&cache_path(), &cached, rules_fingerprint());
+            let _ = cache::save(&cache_path(), &cached, rules_fingerprint(&exclusions));
 
             let _ = sender.send(Message::Done(ScanView {
                 root: report.root,
@@ -3256,6 +3294,68 @@ impl App {
             self.tour = Some(0);
         }
 
+        ui.add_space(10.0);
+        ui.label(RichText::new("EXCLUDED FROM SCAN").size(9.0).color(pal().dim));
+        ui.add_space(3.0);
+        if self.exclusions.is_empty() {
+            ui.label(
+                RichText::new("Nothing excluded — the scan reads every folder.")
+                    .size(10.0)
+                    .color(pal().dim),
+            );
+        } else {
+            let mut remove: Option<usize> = None;
+            for (index, path) in self.exclusions.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(clamp_label(path, 70))
+                            .size(10.0)
+                            .monospace()
+                            .color(pal().muted),
+                    );
+                    if ui.small_button("remove").clicked() {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = remove {
+                self.exclusions.remove(index);
+                save_exclusions(&self.exclusions);
+                let _ = std::fs::remove_file(cache_path());
+                self.toast = Some((
+                    "Exclusions changed. Press Rescan to apply them.".to_string(),
+                    Instant::now(),
+                ));
+            }
+        }
+        match self.zoom.clone() {
+            Some(target) if !is_drive_root(&target) => {
+                let already = self.exclusions.iter().any(|path| path == &target);
+                let exclude = ui.add_enabled(
+                    !already,
+                    egui::Button::new(
+                        RichText::new(format!("Exclude {}", clamp_label(&target, 46))).size(10.5),
+                    ),
+                );
+                if exclude.clicked() {
+                    self.exclusions.push(target);
+                    save_exclusions(&self.exclusions);
+                    let _ = std::fs::remove_file(cache_path());
+                    self.toast = Some((
+                        "Excluded. Press Rescan — the cache no longer matches.".to_string(),
+                        Instant::now(),
+                    ));
+                }
+            }
+            _ => {
+                ui.label(
+                    RichText::new("Zoom into a folder on the map to exclude it.")
+                        .size(10.0)
+                        .color(pal().dim),
+                );
+            }
+        }
+
         ui.add_space(6.0);
         if self.rules_dirty {
             ui.label(
@@ -4080,7 +4180,7 @@ fn mft_probe() {
         println!("{line}");
     }
 
-    if let Some(cached) = cache::load(&cache_path(), rules_fingerprint()) {
+    if let Some(cached) = cache::load(&cache_path(), rules_fingerprint(&[])) {
         let delta_folders = folders as i64 - cached.folders as i64;
         let delta_files = scan.total_files as i64 - cached.total_files as i64;
         let delta_bytes = scan.total_bytes as i64 - cached.total_bytes as i64;

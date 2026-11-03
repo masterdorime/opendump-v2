@@ -68,11 +68,40 @@ pub fn scan(root: &Path) -> ScanReport {
     scan_with_progress(root, |_| {})
 }
 
+/// True when `path` is one of the excluded folders or sits inside one.
+/// Comparison is case-insensitive and separator-agnostic on the trailing slash.
+pub fn is_excluded(path: &str, exclusions: &[String]) -> bool {
+    let path = path.trim_end_matches(['\\', '/']).to_ascii_lowercase();
+    exclusions.iter().any(|raw| {
+        let ex = raw.trim_end_matches(['\\', '/']).to_ascii_lowercase();
+        !ex.is_empty()
+            && (path == ex
+                || (path.len() > ex.len()
+                    && path.starts_with(&ex)
+                    && matches!(path.as_bytes()[ex.len()], b'\\' | b'/')))
+    })
+}
+
+/// Same walk, skipping any folder the user excluded.
+pub fn scan_with_exclusions<F>(root: &Path, exclusions: &[String], on_progress: F) -> ScanReport
+where
+    F: FnMut(ScanProgress),
+{
+    scan_with_progress_ex(root, exclusions, on_progress)
+}
+
 /// Same walk, reporting progress as it goes.
 ///
 /// The callback fires about every 256 folders — frequent enough for a smooth
 /// bar, rare enough that the channel is not the bottleneck.
-pub fn scan_with_progress<F>(root: &Path, mut on_progress: F) -> ScanReport
+pub fn scan_with_progress<F>(root: &Path, on_progress: F) -> ScanReport
+where
+    F: FnMut(ScanProgress),
+{
+    scan_with_progress_ex(root, &[], on_progress)
+}
+
+fn scan_with_progress_ex<F>(root: &Path, exclusions: &[String], mut on_progress: F) -> ScanReport
 where
     F: FnMut(ScanProgress),
 {
@@ -123,7 +152,14 @@ where
                     skipped += 1;
                     continue;
                 }
-                stack.push(entry.path());
+                let child = entry.path();
+                if !exclusions.is_empty()
+                    && is_excluded(&child.to_string_lossy(), exclusions)
+                {
+                    skipped += 1;
+                    continue;
+                }
+                stack.push(child);
                 continue;
             }
 
@@ -224,7 +260,19 @@ pub fn is_drive_root(path: &str) -> bool {
 /// A drive root becomes one sequential read of the MFT. Anything else - a
 /// subfolder, a non-NTFS volume, or a process without Administrator - falls
 /// back to the directory walk, which always works but takes minutes.
-pub fn scan_any<F>(root: &Path, mut on_progress: F) -> ScanReport
+pub fn scan_any<F>(root: &Path, on_progress: F) -> ScanReport
+where
+    F: FnMut(ScanProgress),
+{
+    scan_any_with(root, &[], on_progress)
+}
+
+/// Same as `scan_any`, minus the folders the user excluded.
+///
+/// The MFT path builds the whole tree in one pass, so exclusions are applied
+/// afterwards: the topmost excluded folders are dropped and their bytes and
+/// files are subtracted from every ancestor, leaving totals honest.
+pub fn scan_any_with<F>(root: &Path, exclusions: &[String], mut on_progress: F) -> ScanReport
 where
     F: FnMut(ScanProgress),
 {
@@ -237,11 +285,52 @@ where
             let mut report = crate::mft::build_report(&text, &records, elapsed, skipped);
             // The MFT knows the structure but not what a package.json is.
             crate::mft::mark_package_json(&mut report.dirs);
+            if !exclusions.is_empty() {
+                prune_excluded(&mut report, exclusions);
+            }
             return report;
         }
     }
 
-    scan_with_progress(root, on_progress)
+    scan_with_progress_ex(root, exclusions, on_progress)
+}
+
+/// Drop excluded subtrees and keep the report's totals truthful.
+fn prune_excluded(report: &mut ScanReport, exclusions: &[String]) {
+    let dirs = &report.dirs;
+    // Only the topmost excluded folders, or nested ones would double-subtract.
+    let mut roots: Vec<(String, u64, u64)> = Vec::new();
+    for dir in dirs {
+        if !is_excluded(&dir.path, exclusions) {
+            continue;
+        }
+        let nested = roots.iter().any(|(kept, _, _)| {
+            let lower = dir.path.to_ascii_lowercase();
+            lower.starts_with(&kept.to_ascii_lowercase())
+        });
+        if !nested {
+            roots.push((dir.path.clone(), dir.size, dir.files));
+        }
+    }
+    if roots.is_empty() {
+        return;
+    }
+
+    for dir in &mut report.dirs {
+        let lower = dir.path.to_ascii_lowercase();
+        for (root_path, size, files) in &roots {
+            let root_lower = root_path.to_ascii_lowercase();
+            if lower != root_lower && lower.starts_with(&root_lower) {
+                dir.size = dir.size.saturating_sub(*size);
+                dir.files = dir.files.saturating_sub(*files);
+            }
+        }
+    }
+    report
+        .dirs
+        .retain(|dir| !is_excluded(&dir.path, exclusions));
+    report.total_bytes = report.dirs.iter().map(|dir| dir.size).sum();
+    report.total_files = report.dirs.iter().map(|dir| dir.files).sum();
 }
 
 fn is_profile_root(dir: &Path) -> bool {

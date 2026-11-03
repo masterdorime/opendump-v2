@@ -75,3 +75,41 @@ fn an_empty_folder_scans_to_zero() {
 
     fs::remove_dir_all(&root).expect("cleanup");
 }
+
+#[test]
+fn an_excluded_folder_is_never_read() {
+    let root = temp_root("exclude");
+    fs::create_dir_all(root.join("keep")).expect("create tree");
+    fs::create_dir_all(root.join("skip/deep")).expect("create tree");
+    fs::write(root.join("keep/one.txt"), vec![b'x'; 100]).expect("write");
+    fs::write(root.join("skip/deep/two.txt"), vec![b'x'; 900]).expect("write");
+
+    let excluded = vec![root.join("skip").to_string_lossy().to_string()];
+    let report = opendump_core::scan::scan_with_exclusions(&root, &excluded, |_| {});
+
+    assert_eq!(report.total_bytes, 100, "only the kept file counts");
+    assert_eq!(report.total_files, 1);
+    assert!(
+        !report.dirs.iter().any(|dir| dir.path.contains("skip")),
+        "the excluded folder and its children are absent"
+    );
+    assert!(report.dirs.iter().any(|dir| dir.path.ends_with("keep")));
+
+    fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn exclusion_matching_is_a_path_prefix_not_a_substring() {
+    let excluded = vec![r"C:\Users\tristan\VMs".to_string()];
+
+    assert!(opendump_core::scan::is_excluded(r"C:\Users\tristan\VMs", &excluded));
+    assert!(opendump_core::scan::is_excluded(
+        r"C:\Users\tristan\vms\win11\disk.vmdk",
+        &excluded
+    ));
+    assert!(
+        !opendump_core::scan::is_excluded(r"C:\Users\tristan\VMs-old", &excluded),
+        "a sibling whose name starts with the same letters must survive"
+    );
+    assert!(!opendump_core::scan::is_excluded(r"C:\Users\tristan", &excluded));
+}

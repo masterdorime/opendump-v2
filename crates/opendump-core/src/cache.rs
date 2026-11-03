@@ -54,6 +54,20 @@ pub fn rules_hash(rules_json: &str) -> u64 {
     hash
 }
 
+/// Stable hash of the exclusions, so editing them invalidates the cache too:
+/// a scan that skipped different folders is not the same scan.
+pub fn exclusions_hash(exclusions: &[String]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for path in exclusions {
+        for byte in path.to_ascii_lowercase().as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x1000_0000_01b3);
+        }
+        hash ^= b'\n' as u64;
+    }
+    hash
+}
+
 fn tier_byte(tier: Option<Tier>) -> u8 {
     match tier {
         None => 0,
