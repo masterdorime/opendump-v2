@@ -203,6 +203,15 @@ rebuild before the window sees it. The CLI reads it from disk (cwd, beside the e
    its text to one character per line — and the parent bar grows to fit. That is why the memory
    meters are single labels. Same family as trap 3: an egui child does not get the width you
    assume. Screenshot the header after touching it.
+10. **`with_layout(right_to_left)` inside a `ui.horizontal` is a width trap.** The child gets the
+    width *remaining after the content so far*, not the panel's, so a right-aligned button drifts
+    left or overflows — the Review footer lost its "Quarantine selected" button entirely this way.
+    `allocate_ui_with_layout` has the same problem from the other side: it shrinks to its content,
+    so no spacer can push anything right, and `ui.columns` inside a header consumes the full
+    available *height* — which pushed the treemap canvas off-screen. For a right-aligned row, take
+    `ui.available_width()` **before** creating the row and place the widgets at absolute rects
+    (`chip_at` in `main.rs` is the reference). This bit three times; check any new right-aligned
+    row at 1900 px wide, not just at 1264.
 
 ---
 
