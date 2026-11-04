@@ -1235,6 +1235,40 @@ fn chip(
     response.clicked()
 }
 
+/// A `chip()` drawn at an exact rect, for rows that must not depend on layout.
+fn chip_at(ui: &mut egui::Ui, rect: egui::Rect, label: &str, active: bool, colour: Color32) -> bool {
+    let id = ui.make_persistent_id(("chip-at", label));
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        11.0,
+        if active {
+            colour
+        } else if response.hovered() {
+            mix(pal().panel, pal().text, 0.07)
+        } else {
+            pal().panel
+        },
+    );
+    painter.rect_stroke(
+        rect,
+        11.0,
+        egui::Stroke::new(
+            1.0_f32,
+            if active { colour } else { pal().line },
+        ),
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(10.5),
+        if active { pal().on_accent } else { pal().muted },
+    );
+    response.clicked()
+}
+
 /// The small verdict badge beside a row's path.
 fn tier_pill(ui: &mut egui::Ui, tier: Tier) {
     let colour = tier_color(tier);
@@ -2457,24 +2491,43 @@ impl App {
         let mut zoom_to: Option<String> = None;
         let mut pick_mode: Option<MapColour> = None;
 
-        ui.horizontal(|ui| {
-            if self.zoom.is_some() && ui.button("‹ up").clicked() {
-                zoom_out = true;
-            }
-            ui.label(
-                RichText::new(pretty(&current))
-                    .monospace()
-                    .size(11.5)
-                    .color(pal().muted),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                for (mode, label) in [(MapColour::Status, "STATUS"), (MapColour::Size, "SIZE")] {
-                    if chip(ui, label, 0, 0, self.map_colour == mode, pal().accent) {
-                        pick_mode = Some(mode);
-                    }
+        // Two explicit boxes instead of a nested right-to-left group: the row
+        // gets a fixed height, so it cannot swallow the canvas, and the chips
+        // cannot slide past the map edge.
+        // The row is one fixed-height band. The breadcrumb flows in it and the
+        // chips are placed at absolute rects on its right edge, because every
+        // layout-based attempt drifted with the panel width.
+        let row = egui::Rect::from_min_size(
+            ui.cursor().min,
+            egui::vec2(ui.available_width(), 24.0),
+        );
+        ui.allocate_ui_with_layout(
+            egui::vec2(row.width() - 170.0, 24.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                if self.zoom.is_some() && ui.button("‹ up").clicked() {
+                    zoom_out = true;
                 }
-            });
-        });
+                ui.label(
+                    RichText::new(clamp_label(&pretty(&current), 60))
+                        .monospace()
+                        .size(11.5)
+                        .color(pal().muted),
+                );
+            },
+        );
+        for (mode, label, right) in [
+            (MapColour::Status, "STATUS", 60.0_f32),
+            (MapColour::Size, "SIZE", 138.0_f32),
+        ] {
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(row.right() - right, row.top() + 1.0),
+                egui::vec2(70.0, 22.0),
+            );
+            if chip_at(ui, rect, label, self.map_colour == mode, pal().accent) {
+                pick_mode = Some(mode);
+            }
+        }
         ui.add_space(4.0);
 
         let height = (ui.available_height() - 26.0).max(200.0);
