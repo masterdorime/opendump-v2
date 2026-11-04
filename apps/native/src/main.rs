@@ -504,11 +504,21 @@ fn tour_filtered(app: &App) -> bool {
 fn tour_picked(app: &App) -> bool {
     !app.picked.is_empty()
 }
-fn tour_staged(app: &App) -> bool {
-    app.staged.iter().any(|item| item.status == "quarantined")
+fn quarantined_count(app: &App) -> usize {
+    app.staged
+        .iter()
+        .filter(|item| item.status == "quarantined")
+        .count()
 }
+
+/// Progress means *newly* staged, not "something was already in quarantine from
+/// an earlier session" — otherwise the tour skips the step it exists to teach.
+fn tour_staged(app: &App) -> bool {
+    quarantined_count(app) > app.tour_staged_baseline
+}
+
 fn tour_restored(app: &App) -> bool {
-    !app.staged.iter().any(|item| item.status == "quarantined")
+    app.pane == Pane::Quarantine && quarantined_count(app) <= app.tour_staged_baseline
 }
 fn tour_never(_: &App) -> bool {
     false
@@ -646,6 +656,10 @@ struct App {
     tour_shown: Option<egui::Rect>,
     /// The eased bubble position, so it travels with the hole.
     tour_bubble_at: Option<egui::Pos2>,
+    /// How many folders were already quarantined when the tour began.
+    tour_staged_baseline: usize,
+    /// When the current step's control went missing from the layout.
+    tour_missing_since: Option<f64>,
     /// Panel rects recorded each frame, so tour steps can point at them.
     spots: std::collections::HashMap<&'static str, egui::Rect>,
     /// Seconds (egui time) until the blink ends / the next one is due.
@@ -712,6 +726,8 @@ impl App {
             tour_celebrate: None,
             tour_shown: None,
             tour_bubble_at: None,
+            tour_staged_baseline: 0,
+            tour_missing_since: None,
             spots: Default::default(),
             blink_until: 0.0,
             next_blink: 0.0,
@@ -727,6 +743,10 @@ impl App {
                 app.scan = Some(view_from_cache(cached));
             }
         }
+
+        // The tour measures progress from here: folders staged before it began
+        // must not count as the user having done the step.
+        app.tour_staged_baseline = quarantined_count(&app);
 
         app
     }
@@ -3056,8 +3076,26 @@ impl App {
             self.spots.get(spec.spot).copied()
         };
 
-        // The spotlight glides toward the next control instead of snapping, so a
-        // step change reads as a camera move rather than a flicker.
+        // A step whose control is not on screen would black the window out with
+        // no way forward but Skip. Give it a moment, then move on.
+        if spec.spot != "window" && target.is_none() {
+            match self.tour_missing_since {
+                None => self.tour_missing_since = Some(now),
+                Some(since) if now - since > 1.2 => {
+                    self.tour_missing_since = None;
+                    if index + 1 >= TOUR_STEPS.len() {
+                        self.end_tour();
+                    } else {
+                        self.tour = Some(index + 1);
+                    }
+                    ctx.request_repaint();
+                    return;
+                }
+                Some(_) => {}
+            }
+        } else {
+            self.tour_missing_since = None;
+        }
         let shown = match (self.tour_shown, target) {
             (Some(previous), Some(next)) => Some(ease_rect(previous, next, 0.22)),
             (None, Some(next)) => Some(next),
@@ -3070,13 +3108,17 @@ impl App {
             egui::Id::new("tour-dim"),
         ));
         let dim = Color32::from_black_alpha(168);
-        let bands = match shown {
-            Some(rect) => bands_around(screen, rect),
-            None => [screen; 4],
-        };
-        for band in bands {
-            if band.width() > 0.0 && band.height() > 0.0 {
-                painter.rect_filled(band, 0.0, dim);
+        match shown {
+            Some(hole) => {
+                for band in bands_around(screen, hole) {
+                    if band.width() > 0.0 && band.height() > 0.0 {
+                        painter.rect_filled(band, 0.0, dim);
+                    }
+                }
+            }
+            // One veil, not four stacked ones — four would read as solid black.
+            None => {
+                painter.rect_filled(screen, 0.0, dim);
             }
         }
         if let Some(rect) = shown {
@@ -3095,7 +3137,7 @@ impl App {
                 egui::Stroke::new(1.5_f32, pal().accent),
             );
             // Blocking bands, so the only live control is the one highlighted.
-            for (slot, band) in bands.iter().enumerate() {
+            for (slot, band) in bands_around(screen, rect).iter().enumerate() {
                 if band.width() <= 0.0 || band.height() <= 0.0 {
                     continue;
                 }
@@ -3313,6 +3355,7 @@ impl App {
         ui.add_space(2.0);
         if ui.button(RichText::new("Show the tour").size(10.5)).clicked() {
             self.tour = Some(0);
+            self.tour_staged_baseline = quarantined_count(self);
         }
 
         ui.add_space(10.0);
@@ -4499,8 +4542,15 @@ fn main() -> eframe::Result<()> {
         app.tour = None;
         app.tour_seen = true;
     }
+    if let Some(index) = argv.iter().position(|arg| arg == "--tour-step") {
+        if let Some(step) = argv.get(index + 1).and_then(|value| value.parse::<usize>().ok()) {
+            app.tour = Some(step.min(TOUR_STEPS.len() - 1));
+            app.tour_staged_baseline = quarantined_count(&app);
+        }
+    }
     if argv.iter().any(|arg| arg == "--tour") {
         app.tour = Some(0);
+        app.tour_staged_baseline = quarantined_count(&app);
     }
     if let Some(index) = argv.iter().position(|arg| arg == "--pane") {
         app.pane = match argv.get(index + 1).map(|value| value.as_str()) {
