@@ -14,6 +14,7 @@ use std::time::Instant;
 use eframe::egui::{self, Color32, RichText};
 use serde::Deserialize;
 
+use opendump_core::cloud as cloud_client;
 use opendump_core::{
     ai, apply_overrides, bytes, cache, compile, default_tokens, find_candidates, hardware, inspect_folder,
     inspect_staged,
@@ -340,6 +341,70 @@ fn save_settings(settings: Settings) {
             "tour_step": settings.tour_step,
         })
             .to_string(),
+    );
+}
+
+/// Cloud provider settings. The key is deliberately *not* here: it lives in
+/// memory for the session only, because this path is unverified and there is no
+/// reason to leave a credential on disk for it.
+#[derive(Clone)]
+struct CloudSettings {
+    enabled: bool,
+    endpoint: String,
+    model: String,
+}
+
+impl Default for CloudSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: String::new(),
+            model: String::new(),
+        }
+    }
+}
+
+fn cloud_path() -> PathBuf {
+    base_dir().join("cloud.json")
+}
+
+fn load_cloud() -> CloudSettings {
+    let value = std::fs::read_to_string(cloud_path())
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let Some(value) = value else {
+        return CloudSettings::default();
+    };
+    CloudSettings {
+        enabled: value
+            .get("enabled")
+            .and_then(|flag| flag.as_bool())
+            .unwrap_or(false),
+        endpoint: value
+            .get("endpoint")
+            .and_then(|text| text.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        model: value
+            .get("model")
+            .and_then(|text| text.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+fn save_cloud(cloud: &CloudSettings) {
+    if let Some(parent) = cloud_path().parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(
+        cloud_path(),
+        serde_json::json!({
+            "enabled": cloud.enabled,
+            "endpoint": cloud.endpoint,
+            "model": cloud.model,
+        })
+        .to_string(),
     );
 }
 
@@ -679,6 +744,11 @@ struct App {
     mascot_on: bool,
     /// Folders the scan skips entirely; changing them invalidates the cache.
     exclusions: Vec<String>,
+    /// Opt-in cloud provider. `key` is memory-only.
+    cloud: CloudSettings,
+    cloud_key: String,
+    /// The exact payload, shown before anything is sent.
+    cloud_preview: Option<String>,
     /// `Some(step)` while the guided tour runs.
     tour: Option<usize>,
     tour_seen: bool,
@@ -753,6 +823,9 @@ impl App {
             forced_mood: None,
             mascot_on: settings.mascot,
             exclusions: load_exclusions(),
+            cloud: load_cloud(),
+            cloud_key: String::new(),
+            cloud_preview: None,
             tour: if settings.tour_seen { None } else { Some(0) },
             tour_seen: settings.tour_seen,
             tour_celebrate: None,
@@ -2781,7 +2854,129 @@ impl App {
     ///
     /// Nothing here can authorise deletion — the ceiling is pal().review, and the
     /// results are shown as suggestions with their confidence attached.
+    /// The opt-in cloud provider.
+    ///
+    /// Off by default, key in memory only, and the payload is shown before
+    /// anything is sent — this path has never been run against a live endpoint,
+    /// so it has to be inspectable rather than trusted.
+    fn cloud_section(&mut self, ui: &mut egui::Ui) {
+        egui::Frame::none()
+            .fill(pal().panel)
+            .stroke(egui::Stroke::new(1.0_f32, pal().line))
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+            .show(ui, |ui| {
+                let mut enabled = self.cloud.enabled;
+                if ui
+                    .checkbox(
+                        &mut enabled,
+                        RichText::new("Use a cloud endpoint instead of Ollama")
+                            .size(11.0)
+                            .color(pal().text),
+                    )
+                    .changed()
+                {
+                    self.cloud.enabled = enabled;
+                    save_cloud(&self.cloud);
+                }
+                if !self.cloud.enabled {
+                    ui.label(
+                        RichText::new(
+                            "Off. Nothing leaves the machine unless you configure this.",
+                        )
+                        .size(10.0)
+                        .color(pal().dim),
+                    );
+                    return;
+                }
+
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Sends: folder path, size, file count, matched category.                          Never file names, never contents.",
+                    )
+                    .size(10.0)
+                    .color(pal().muted),
+                );
+                ui.add_space(6.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("endpoint").size(10.0).color(pal().dim));
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.cloud.endpoint)
+                                .desired_width(380.0)
+                                .hint_text("https://host/v1/chat/completions"),
+                        )
+                        .changed()
+                    {
+                        save_cloud(&self.cloud);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("model").size(10.0).color(pal().dim));
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.cloud.model)
+                                .desired_width(240.0),
+                        )
+                        .changed()
+                    {
+                        save_cloud(&self.cloud);
+                    }
+                    ui.label(RichText::new("key").size(10.0).color(pal().dim));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.cloud_key)
+                            .password(true)
+                            .desired_width(220.0)
+                            .hint_text("this session only"),
+                    );
+                });
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Show what would be sent").clicked() {
+                        let items = self
+                            .scan
+                            .as_ref()
+                            .map(|view| unclassified_items(view, 64 * 1024 * 1024, 16))
+                            .unwrap_or_default();
+                        let config = cloud_client::CloudConfig {
+                            endpoint: self.cloud.endpoint.clone(),
+                            model: self.cloud.model.clone(),
+                            key: String::new(),
+                        };
+                        self.cloud_preview = Some(cloud_client::preview(&config, &items));
+                    }
+                    ui.label(
+                        RichText::new("Unverified: never tested against a live endpoint.")
+                            .size(10.0)
+                            .color(pal().review),
+                    );
+                });
+                if let Some(preview) = self.cloud_preview.clone() {
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(150.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(preview)
+                                        .monospace()
+                                        .size(9.5)
+                                        .color(pal().dim),
+                                )
+                                .selectable(true),
+                            );
+                        });
+                }
+            });
+        ui.add_space(8.0);
+    }
+
     fn ai_pane(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.cloud_section(ui);
+
         let reachable = !self.ai_models.is_empty();
         let ram_free = self.mem.ram_free;
         let gate_ok = ram_free >= 1_200 * 1024 * 1024;
@@ -3626,14 +3821,33 @@ impl App {
         let endpoint = self.ai_endpoint.clone();
         let model = self.ai_model.clone();
         let total = items.len();
+        // Opt-in only, and only when a key was typed this session.
+        let cloud = if self.cloud.enabled && !self.cloud_key.trim().is_empty() {
+            Some(cloud_client::CloudConfig {
+                endpoint: self.cloud.endpoint.clone(),
+                model: self.cloud.model.clone(),
+                key: self.cloud_key.clone(),
+            })
+        } else {
+            None
+        };
 
         std::thread::spawn(move || {
             let mut collected = Vec::new();
             for (index, batch) in items.chunks(8).enumerate() {
-                match ai::classify(&endpoint, &model, batch) {
+                let result = match &cloud {
+                    Some(config) => cloud_client::classify(config, batch),
+                    None => ai::classify(&endpoint, &model, batch),
+                };
+                match result {
                     Ok(verdicts) => collected.extend(verdicts),
                     Err(error) => {
-                        let _ = sender.send(Message::AiError(error));
+                        let message = if cloud.is_some() {
+                            format!("cloud: {error}")
+                        } else {
+                            error
+                        };
+                        let _ = sender.send(Message::AiError(message));
                         ctx.request_repaint();
                         return;
                     }

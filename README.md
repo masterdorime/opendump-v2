@@ -187,11 +187,14 @@ GB?" on the second click. Deleting staged data is the one action with no undo.
 
 What it is not: egui's stock widgets do not match a hand-styled CSS interface pixel for pixel.
 The look is close — same palette, same rows, same tier colours — but it is a reimplementation.
-The cloud AI provider is still only in v0.5.
+A cloud endpoint can be used instead, from the same panel: **off by default**, key held in memory for
+the session only, and the exact payload is shown before anything is sent. It has never been run
+against a live endpoint, so it is labelled unverified in the UI.
 
 ## What is not here yet
 
-- **Cloud AI provider** - wired, never tested against a live endpoint
+- **Cloud AI, verified** — the client exists and is opt-in, but nobody has run it against a live
+  endpoint. Treat the transport as unproven, not the verdict ceiling
 - **Code signing** — the v0.1.1 binaries are unsigned, so SmartScreen warns once
 
 **Deliberately not planned:** removing `hiberfil.sys`, `pagefile.sys`, the Windows Update cache or

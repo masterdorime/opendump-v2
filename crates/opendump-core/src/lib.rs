@@ -14,6 +14,7 @@
 
 pub mod ai;
 pub mod cache;
+pub mod cloud;
 pub mod executor;
 pub mod format;
 pub mod hardware;
