@@ -176,7 +176,7 @@ WebView2** at runtime to draw one window that egui already drew in 10.9 MB with 
 
 The rest of the receipts:
 
-- **9,557 lines** of Rust across the core, the CLI and the window.
+- **9,588 lines** of Rust across the core, the CLI and the window.
 - **78 tests** (`cargo test --workspace`), including the invariants that keep deletion safe: exclusive
   sizing never exceeds the tree, protection blocks its parent, excluded folders are never read.
 - **No async runtime.** Work runs on `std::thread` and results return over an `mpsc` channel.
