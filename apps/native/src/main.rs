@@ -243,6 +243,38 @@ fn save_overrides(disabled: &std::collections::HashSet<String>) {
     }
 }
 
+#[link(name = "user32")]
+extern "system" {
+    fn SystemParametersInfoW(
+        action: u32,
+        param: u32,
+        value: *mut core::ffi::c_void,
+        win_ini: u32,
+    ) -> i32;
+}
+
+/// Windows' "Animation effects" setting.
+///
+/// False means the user asked for less motion: nothing is removed, the mascot
+/// simply holds a still frame and the tour snaps instead of easing. Cached once
+/// because it is a syscall and the answer does not change mid-session.
+fn motion_allowed() -> bool {
+    const SPI_GETCLIENTAREAANIMATION: u32 = 0x1042;
+    static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALLOWED.get_or_init(|| {
+        let mut enabled: i32 = 1;
+        unsafe {
+            SystemParametersInfoW(
+                SPI_GETCLIENTAREAANIMATION,
+                0,
+                &mut enabled as *mut i32 as *mut core::ffi::c_void,
+                0,
+            );
+        }
+        enabled != 0
+    })
+}
+
 /// UI preferences; small enough to rewrite whole on every change — but every
 /// key must be written every time, or toggling one setting erases the others.
 #[derive(Clone, Copy)]
@@ -530,7 +562,7 @@ fn tour_never(_: &App) -> bool {
 const TOUR_STEPS: [TourStep; 8] = [
     TourStep {
         spot: "scan",
-        title: "Press Scan.",
+        title: "I'm Kiroku-chan. Press Scan.",
         body: "I'll read every folder on the drive and sort them by how safe they are to remove.",
         mood: MascotMood::Greeting,
         done: tour_scanned,
@@ -2975,7 +3007,7 @@ impl App {
             };
             return handle.as_ref().map(|texture| texture.id());
         }
-        if now >= self.next_blink {
+        if motion_allowed() && now >= self.next_blink {
             self.blink_until = now + 0.12;
             let jitter = (now * 0.37).fract() * 3.0;
             self.next_blink = now + 4.0 + jitter;
@@ -3149,10 +3181,14 @@ impl App {
         } else {
             self.tour_missing_since = None;
         }
-        let shown = match (self.tour_shown, target) {
-            (Some(previous), Some(next)) => Some(ease_rect(previous, next, 0.22)),
-            (None, Some(next)) => Some(next),
-            (_, None) => None,
+        let shown = if !motion_allowed() {
+            target
+        } else {
+            match (self.tour_shown, target) {
+                (Some(previous), Some(next)) => Some(ease_rect(previous, next, 0.22)),
+                (None, Some(next)) => Some(next),
+                (_, None) => None,
+            }
         };
         self.tour_shown = shown;
 
@@ -3232,10 +3268,13 @@ impl App {
         by = by.clamp(10.0, (screen.bottom() - bubble_h - 10.0).max(10.0));
         // Same easing for the bubble, so the whole thing reads as one camera move.
         let wanted = egui::pos2(bx, by);
-        let at = self
-            .tour_bubble_at
-            .map(|previous| previous + (wanted - previous) * 0.25)
-            .unwrap_or(wanted);
+        let at = if !motion_allowed() {
+            wanted
+        } else {
+            self.tour_bubble_at
+                .map(|previous| previous + (wanted - previous) * 0.25)
+                .unwrap_or(wanted)
+        };
         self.tour_bubble_at = Some(at);
         let (bx, by) = (at.x, at.y);
         let on_left = shown
@@ -3327,7 +3366,31 @@ impl App {
         } else if advance_manual {
             self.end_tour();
         }
-        ctx.request_repaint();
+
+        // Only keep painting while something is actually moving. The old code
+        // asked for a frame every frame, which redrew the whole UI at 60 fps for
+        // as long as the tour was open — the motion itself costs nothing.
+        let hole_settled = match (shown, target) {
+            (Some(a), Some(b)) => a.min.distance(b.min) < 0.5 && a.max.distance(b.max) < 0.5,
+            (None, None) => true,
+            _ => false,
+        };
+        let bubble_settled = self
+            .tour_bubble_at
+            .map(|at| (at - egui::pos2(bx, by)).length() < 0.5)
+            .unwrap_or(true);
+        if !(hole_settled && bubble_settled) {
+            ctx.request_repaint();
+        } else {
+            let until = if now < self.blink_until {
+                self.blink_until
+            } else {
+                self.next_blink
+            };
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                (until - now).clamp(0.05, 8.0),
+            ));
+        }
     }
 
     fn tour_portrait(
