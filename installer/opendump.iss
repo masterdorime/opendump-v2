@@ -59,14 +59,19 @@ Filename: "{app}\{#AppExe}"; Description: "Open opendump"; Flags: nowait postins
 // Nothing under %APPDATA%\opendump-native is removed: that is where staged
 // folders wait for a decision, and an uninstaller must never decide for them.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ErrorCode: Integer;
 begin
   // Never block an unattended uninstall: /SILENT and /VERYSILENT are how this
   // runs from a package manager or a CI cleanup.
   if (CurUninstallStep = usPostUninstall) and (not UninstallSilent) then
-    MsgBox('opendump is removed.' + #13#10 + #13#10 +
-           'Your staged quarantine and scan cache were left untouched in' + #13#10 +
-           '%APPDATA%\opendump-native' + #13#10 + #13#10 +
-           'Delete that folder yourself if you want it gone — anything still ' +
-           'staged there has not been deleted yet.',
-           mbInformation, MB_OK);
+  begin
+    if MsgBox('opendump is removed.' + #13#10 + #13#10 +
+              'Your quarantine folder was left in place. Nothing in it has been ' +
+              'deleted — anything still there is waiting for a decision.' + #13#10 + #13#10 +
+              'Open it now?',
+              mbConfirmation, MB_YESNO) = IDYES then
+      ShellExec('open', ExpandConstant('{userappdata}\opendump-native'), '',
+                '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
+  end;
 end;

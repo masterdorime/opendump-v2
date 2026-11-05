@@ -851,6 +851,12 @@ impl App {
 
         // The tour measures progress from here: folders staged before it began
         // must not count as the user having done the step.
+        // Older builds wrote the MFT dump into the profile; clean it up once.
+        let legacy_dump = base_dir().join("mft-records.bin");
+        if legacy_dump.exists() {
+            let _ = std::fs::remove_file(&legacy_dump);
+        }
+
         app.tour_staged_baseline = quarantined_count(&app);
 
         app
@@ -4509,7 +4515,7 @@ fn nav_item(
 /// Read the master file table and report what it found.
 ///
 /// Needs Administrator: the volume handle is refused otherwise. Writes
-/// mft-probe.txt and mft-records.bin into the profile so the result, and the
+/// mft-probe.txt into the profile and the raw dump into TEMP, so the result, and the
 /// parsed tree, can be inspected without an elevated shell.
 fn mft_probe() {
     let drive = default_drive();
@@ -4644,7 +4650,9 @@ fn mft_probe() {
         dump.extend_from_slice(&file.size.to_le_bytes());
     }
 
-    let dump_path = base_dir().join("mft-records.bin");
+    // A 40+ MB debug dump has no business outliving the probe that wrote it, and
+    // no business in a user's app profile. TEMP, and clearly named.
+    let dump_path = std::env::temp_dir().join("opendump-mft-records.bin");
     let _ = std::fs::write(&dump_path, &dump);
     println!(
         "dump      {} ({:.0} MB)",
@@ -4660,7 +4668,7 @@ fn mft_replay() {
         .skip_while(|arg| arg != "--mft-replay")
         .nth(1)
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| base_dir().join("mft-records.bin"));
+        .unwrap_or_else(|| std::env::temp_dir().join("opendump-mft-records.bin"));
 
     let Ok(raw) = std::fs::read(&path) else {
         println!("cannot read {}", path.display());
