@@ -762,6 +762,9 @@ struct App {
     tour_staged_baseline: usize,
     /// When the current step's control went missing from the layout.
     tour_missing_since: Option<f64>,
+    /// `--tour-demo`: advance every 2 s regardless of the action, for recording.
+    tour_demo: bool,
+    tour_demo_at: Option<f64>,
     /// Panel rects recorded each frame, so tour steps can point at them.
     spots: std::collections::HashMap<&'static str, egui::Rect>,
     /// Seconds (egui time) until the blink ends / the next one is due.
@@ -833,6 +836,8 @@ impl App {
             tour_bubble_at: None,
             tour_staged_baseline: 0,
             tour_missing_since: None,
+            tour_demo: false,
+            tour_demo_at: None,
             spots: Default::default(),
             blink_until: 0.0,
             next_blink: 0.0,
@@ -3312,6 +3317,21 @@ impl App {
         let now = ctx.input(|input| input.time);
         let spec = &TOUR_STEPS[index];
 
+        // Recording mode only: walk the steps on a timer so a screen capture can
+        // photograph the spotlight moving. Real users never see this.
+        if self.tour_demo {
+            let last = *self.tour_demo_at.get_or_insert(now);
+            if now - last > 2.0 {
+                self.tour_demo_at = Some(now);
+                if index + 1 >= TOUR_STEPS.len() {
+                    self.end_tour();
+                    return;
+                }
+                self.tour = Some(index + 1);
+                ctx.request_repaint();
+            }
+        }
+
         if self.tour_celebrate.is_none() && !spec.manual && (spec.done)(self) {
             self.tour_celebrate = Some(now + 1.2);
             save_settings(Settings {
@@ -3930,7 +3950,7 @@ impl App {
             .auto_shrink([false, false])
             .max_height(
                 (ui.available_height()
-                    - if self.mascot_on { portrait + 118.0 } else { 96.0 })
+                    - if self.mascot_on { portrait + 146.0 } else { 96.0 })
                 .max(120.0),
             )
             .show(ui, |ui| {
@@ -4885,6 +4905,11 @@ fn main() -> eframe::Result<()> {
             app.tour = Some(step.min(TOUR_STEPS.len() - 1));
             app.tour_staged_baseline = quarantined_count(&app);
         }
+    }
+    if argv.iter().any(|arg| arg == "--tour-demo") {
+        app.tour = Some(0);
+        app.tour_demo = true;
+        app.tour_staged_baseline = quarantined_count(&app);
     }
     if argv.iter().any(|arg| arg == "--tour") {
         app.tour = Some(0);

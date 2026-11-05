@@ -1,222 +1,244 @@
-# opendump v2
+# opendump
 
-> **v0.1.1 — the Rust rewrite, now with its own window.** Download it from
-> [Releases](https://github.com/masterdorime/opendump-v2/releases). The supported release is still
-> [opendump v0.5.0](https://github.com/masterdorime/opendump/releases) — it has the full UI, the
-> guided tour, local AI, and an installer.
+**A disk audit that explains itself.** Scan a Windows drive, see every folder sized and classified
+by how safe it is to remove — one row, one reason, one checkbox at a time.
 
-This repository is the Rust rewrite of opendump's engine, with a native window. It exists
-separately because it is a different stack with a different build, and because the Electron app
-should stay the supported release until this one can do the same job.
+[![Rust](https://img.shields.io/badge/built%20with-Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Windows](https://img.shields.io/badge/platform-Windows%20x64-0078D6)](#install)
+[![Download](https://img.shields.io/badge/download-10.9%20MB-lightgrey)](#install)
+[![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen)](#built-in-rust)
 
-## Why rewrite at all
+> **Measured on one machine, not estimated:** a full `C:\` scan in **4.9 s** reading the NTFS MFT,
+> **89 MB** of RAM idle, **10.9 MB** to download, and **no runtime** — one binary, no webview.
 
-Measured on the v1 build, not estimated:
+`Get-ChildItem -Recurse` on 400 GB takes ten minutes and tells you nothing actionable. This tells you
+what is on the drive, what it is, whether it comes back if you delete it — and then refuses to delete
+anything until you say so twice.
 
-| | opendump v0.5 (Electron) |
+---
+
+## Contents
+
+- [What it does](#what-it-does)
+- [The one rule](#the-one-rule)
+- [Install](#install)
+- [First run](#first-run)
+- [Risk tiers](#risk-tiers)
+- [What the executor refuses](#what-the-executor-refuses)
+- [Editing the rules](#editing-the-rules)
+- [Built in Rust](#built-in-rust)
+- [Privacy](#privacy)
+- [Known limitations](#known-limitations)
+- [Roadmap](#roadmap)
+
+---
+
+## What it does
+
+- **Scans** a drive in parallel and caches the result, so the second open is instant.
+- **Maps** it as a treemap: area is size, colour is risk. Click to drill in.
+- **Classifies** every folder above 1 MB against a rule set you can read and edit.
+- **Explains** every candidate — the category, why it is safe (or not), and what breaks if you
+  remove it.
+- **Quarantines** on a same-volume rename: instant, reversible, no free space needed.
+- **Purges** only on a second, explicit confirmation that names the folders and the bytes.
+
+<p align="center">
+  <img src="docs/map.png" width="49%" alt="The treemap, coloured by risk tier, with the drive inspector open">
+  <img src="docs/review.png" width="49%" alt="The review list: every candidate with its reason and size">
+</p>
+
+Rules decide. Nothing else does — not a heuristic, not a language model.
+
+## The one rule
+
+> **Nothing deletes without an explicit, acknowledged confirmation.** One module holds write power,
+> it refuses what it did not classify as removable, and it journals its intent before touching disk.
+
+Everything else in this README is a consequence of that sentence. The classifier has no write
+capability at all, so a bug there can annoy you but cannot destroy anything. The executor re-checks
+every path itself, refuses drive roots, refuses symbolic links, refuses anything outside a known
+quarantine batch, and writes the plan to an append-only journal *before* the first rename.
+
+## Install
+
+Windows 10 or 11, x64. Nothing else is bundled.
+
+**[Releases](https://github.com/masterdorime/opendump-v2/releases/latest)** — two artefacts, same app:
+
+| | |
 | --- | --- |
-| Installer / portable | 116.6 MB / 105.7 MB |
-| Installed directory | **366 MB** |
-| Idle RAM (4 processes) | **377 MB** |
-| Actual product code | 8.8 MB (`app.asar`, ~5,400 lines) |
+| `opendump-0.2.0-setup.exe` | Per-user installer, **5.8 MB**. No administrator prompt |
+| `opendump-0.2.0-windows-x64.zip` | Portable, **5.3 MB**. Unzip anywhere and run |
 
-A disk-cleanup tool that occupies 366 MB of disk and 377 MB of RAM is a fair criticism, and the
-ratio — 8.8 MB of product inside 366 MB of runtime — is the real argument.
+The binaries are **unsigned**, so Windows says *"Unknown publisher"* the first time. That is expected
+— signing needs a certificate this project does not have yet. *More info → Run anyway.*
 
-Rust also opens the door to the one thing JavaScript cannot fix: **the scan**. v1 takes 172–299 s
-because it asks the filesystem about ~1.86 million files one at a time. Reading the NTFS MFT
-directly is a plausibly sub-10-second operation, and that is a native-code problem.
+The installer puts things in `%LOCALAPPDATA%\Programs\opendump`, adds a Start-menu entry, and on
+uninstall it **leaves your quarantine folder alone** — anything staged there has not been deleted,
+and an uninstaller has no business deciding that for you.
 
-## What is here
+## First run
 
-`crates/opendump-core` — the engine, ported deliberately rather than transliterated.
-`crates/opendump-cli` — a command-line front end. `scan` is read-only; `quarantine`, `restore`
-and `purge` require explicit confirmation flags.
+Press **Scan**. A full drive takes about five seconds if the app is elevated (it reads the NTFS MFT)
+and 75–100 seconds otherwise (it walks the tree). The result is cached, so every later open is
+instant.
 
-| Module | Contents |
+**Kiroku-chan** — the guide in the right rail — walks you through the first scan: press Scan, click a
+tile, open Review, pick a tier, tick a folder, quarantine it, restore it. Each step waits for the
+real control, and the spotlight follows. She also restates what the matched rule said about whatever
+folder you have selected, with the tier, the exclusive size and the reason. She is decoration with a
+job: she can repeat what a rule decided, and she can never invent a verdict. You can hide her in
+**Rules**.
+
+<p align="center">
+  <img src="docs/tour.png" width="49%" alt="The guided tour stepping through a real action">
+  <img src="docs/guide.png" width="49%" alt="The guide card restating the matched rule">
+</p>
+
+## Risk tiers
+
+| Tier | Meaning | Selectable |
+| --- | --- | --- |
+| 🟢 `SAFE_PURGE` | Regenerates itself: package caches, shader caches, Temp, build output | yes |
+| 🟡 `REVIEW` | Needs your judgement: model weights, emulator images, Downloads, app data | yes |
+| 🔵 `KEEP` | Your data, or a folder containing it | yes, never pre-selected |
+| 🔴 `LOCKED` | System-critical (`WinSxS`, `System32`, `Windows\Installer`) | **no** |
+
+Two invariants worth knowing, because they are what make the totals honest:
+
+**Nested folders never double-count.** A candidate reports its *exclusive* bytes — its own size minus
+any nested candidates — so ticking a parent and its child never promises the same space twice.
+
+**Protection is monotonic downward.** A `KEEP` folder protects everything beneath it. A parent holding
+protected data is flagged `blocked` and is never removable as a whole.
+
+## What the executor refuses
+
+| Situation | Behaviour |
 | --- | --- |
-| `types` | `Tier`, `Rule`, `RuleMatch`, `DirEntry` |
-| `tokens` | `%LOCALAPPDATA%`-style expansion against an injectable map |
-| `rules` | rule compilation, AND matcher semantics, `find_candidates` |
-| `scan` | recursive walk with recursive sizes, and `scan_any` (MFT first, walk as fallback) |
-| `mft` | NTFS Master File Table reader: boot sector, fixups, run lists, tree build |
-| `executor` | quarantine / restore / purge, journal-first |
-| `layout` | squarified treemap over plain rectangles, no UI dependency |
-| `hardware` | RAM via `GlobalMemoryStatusEx`, free VRAM via `nvidia-smi` |
-| `inspect` | folder contents: extension mix, largest files, hashed-vs-human names |
-| `ai` | local Ollama client, prompt, schema, verdicts capped at REVIEW |
-| `cache` | versioned binary scan cache, rules-hash invalidated |
-| `format` | byte and count formatting, shared by every front end |
+| `KEEP` / `LOCKED` tier | refused, even if the UI sends it |
+| drive root (`C:\`) | refused |
+| anything inside a quarantine folder | refused |
+| a path on another volume than its staging root | staged on that volume instead |
+| symbolic link or junction | refused |
+| path vanished since the scan | skipped, with a reason |
+| folder in use by another program | skipped with `EBUSY`/`EPERM` — apps are never force-closed |
+| destination already exists | staged as `name (2)` rather than overwriting |
 
-**Requirements:** Windows 10 or 11, x64. Nothing else is bundled - the window
-talks to Win32 directly and there is no webview.
+## Editing the rules
 
-- **To use a released build:** download `opendump-0.2.0-windows-x64.zip` from
-  [Releases](https://github.com/masterdorime/opendump-v2/releases), unzip it anywhere, and run
-  `opendump.exe` or `opendump-native.exe`. Keep the `rules\` folder beside the executables — the
-  CLI resolves `rules\rules.json` from there, and the window has the same file compiled in.
-  The binaries are **unsigned**, so SmartScreen shows "Unknown publisher" and may require
-  *More info → Run anyway*.
-- **To build:** Rust stable with the MSVC toolchain (`rustup default stable-msvc`).
-- **Local AI is optional.** It needs [Ollama](https://ollama.com) running on
-  `127.0.0.1:11434` with at least one model pulled. Without it the AI view says so
-  and everything else works; the app never downloads or starts a model itself.
+`rules/rules.json` is the whole classification system: plain JSON, ordered, first match wins. Matchers
+on one rule are **ANDed**, so "this name, but only under that tree" is expressible:
 
-```bash
-cargo test          # 73 tests across core, CLI and the window
-cargo build --release
+```json
+{
+  "id": "purge-node-modules",
+  "tier": "SAFE_PURGE",
+  "reason": "Installed JS dependencies. Run `npm install` to recreate.",
+  "match": { "prefix": "%PROGRAMFILES%", "name": "node_modules" },
+  "requiresSibling": "package.json"
+}
 ```
 
-### Try it
+- `match.prefix` — path prefix, tokens expanded
+- `match.name` — the final path segment
+- `match.regex` — a full-path regular expression
+- `requiresSibling` — only match when that file sits in the **parent** folder
+- `display: true` — colours the map, is never a review item, and protects nothing
 
-```bash
-./target/release/opendump scan "C:\Users\you\AppData\Local" --top 20
-```
+Your own rules go in `rules/overrides.json`, which is prepended so they win. The window compiles
+`rules.json` in at build time, so editing it needs a rebuild, and a changed rule set invalidates the
+scan cache: press **Rescan** and the new verdicts appear from a fresh read of the same drive.
 
-```
-opendump 0.1.1 — rust core
-root      C:\Users\you\AppData\Local
-rules     rules/rules.json (80 loaded)
+**Exclude from scan** is in **Rules**: zoom into a folder on the map, exclude it, and both the walk
+and the MFT reader skip it. The cache key includes the list, so the cached result stops answering the
+moment you change it.
 
-folders   87,008
-files     551,683
-size      87.2 GB
-scan      21.96s  (3,963 folders/s)
+## Built in Rust
 
-candidates (>= 1.0 MB exclusive)
-  SAFE_PURGE     4       8.7 GB
-  REVIEW         7      29.8 GB
-  KEEP          41      31.5 GB
-  LOCKED         0          0 B
+Three workspaces, one binary each, no runtime and no webview.
 
-top 10 by reclaimed bytes
-  KEEP           14.6 GB  ...\CapCut  [holds 2.4 GB protected]
-  REVIEW          5.5 GB  ...\CapCut\User Data\Cache
-  SAFE_PURGE      6.2 GB  ...\npm-cache
-```
-
-**It is read-only.** `scan` never removes, renames or writes anything.
-
-### Cleaning (two deliberate steps)
-
-```bash
-opendump quarantine "$LOCALAPPDATA\Temp\some-cache"        # prints the plan, does nothing
-opendump quarantine "$LOCALAPPDATA\Temp\some-cache" --yes  # moves it into quarantine
-opendump list                                              # what is staged
-opendump restore --all                                     # undo
-opendump purge --all --yes                                 # reclaim the space
-```
-
-The guards, in order:
-
-- **`quarantine` refuses any folder the rules do not classify as removable.** It re-classifies
-  the path you gave it and prints which rule decided. A folder that only matches the broad
-  `KEEP` catch-all is refused:
-
-  ```
-  refused  C:\Users\you\some-folder: classified KEEP by keep-profile
-  ```
-
-- **`--allow-review`** is required to accept `REVIEW` folders; nothing accepts `KEEP` or
-  `LOCKED`, and the executor refuses those tiers again independently.
-- **Nothing happens without `--yes`.** Both `quarantine` and `purge` print their plan and exit 1.
-- **Purge is irreversible.** It prints the byte count and refuses without `--yes`.
-- Cross-volume moves are refused: the destination must share the source's volume, because a move
-  must be a rename.
-
-### Measured against the Electron build
-
-| | v0.5 (Electron/JS) | v2 (Rust) |
+| | v0.5 (Electron) | this |
 | --- | --- | --- |
-| Full `C:\` scan | 172 s idle / 299 s loaded | **4.9 s via MFT** (elevated) · 75 s walk fallback |
-| Binary / install | 366 MB installed | **1.9 MB CLI · 7.0 MB window**, no installer |
-| Folders/sec | ~2,200 | ~3,530 walking; the MFT path is far higher |
+| Full `C:\` scan | 172–299 s | **4.9 s** reading the NTFS MFT (elevated); ~75 s walking |
+| Idle RAM | 377 MB, 4 processes | **89 MB, 1 process** |
+| Download | 116.6 MB installer | **10.9 MB** exe, 5.8 MB installer |
+| Runtime | Chromium + Node | **none** |
 
-The MFT number is the point of the rewrite: 423.6 GB read in 4.9 s, against the same tree walked
-in 75 s. Without elevation the MFT is unreadable, so the walk is what most users actually get.
+The scan is why the rewrite exists. Walking 1.7 million files is a filesystem problem, and reading
+the **Master File Table** directly is a native-code problem: one bulk read of the volume's index
+instead of hundreds of thousands of directory calls.
 
-Same classifications: `CapCut\Cache` → REVIEW, `CapCut\Projects` → KEEP, `npm-cache` →
-SAFE_PURGE, and `CapCut` flagged as *holds 2.4 GB protected*.
+A webview was tried and **deleted**: a Tauri shell produced a 9.98 MB exe but pulled **316 MB of
+WebView2** at runtime to draw one window that egui already drew in 10.9 MB with no runtime at all.
 
-Verified against `robocopy /L` on four subtrees — `Users`, `Windows`, `ProgramData`,
-`Program Files` — all matched to within noise.
+The rest of the receipts:
 
-> **Note on totals:** the full-drive sum is larger than the physical used space because hard
-> links (WinSxS ↔ WindowsApps) are counted per path. `robocopy` behaves identically. v2 also
-> counts `pagefile.sys` and `hiberfil.sys`, which v0.5 silently skipped — about 29 GB it was
-> under-reporting.
-
-`rules/rules.json` is copied verbatim from opendump v0.5 and must stay in sync until the two
-repositories merge. The rule data is the product; only the engine changed.
-
-### The invariants this crate is built around
-
-1. **Matchers on one rule are ANDed** — `{ prefix, name }` requires both.
-2. **A candidate reports exclusive bytes** — its own size minus nested candidate groups — so
-   totals never double-count.
-3. **Protection is monotonic downward** — a `KEEP` or `LOCKED` folder protects everything beneath
-   it, and any parent holding such data is reported `blocked` rather than removable.
-4. **`display` rules colour a map, protect nothing, and are never candidates.**
-
-These are the same four guarantees the TypeScript engine enforces. Porting them was the point;
-the language is not what makes opendump safe, the design is.
-
-## Two front ends, one engine
-
-| | v0.5 (Electron) | v2 native |
-| --- | --- | --- |
-| Rendered with | Chromium | **egui → GPU** |
-| Installer | 116.6 MB | — (raw exe 7.0 MB) |
-| Idle RAM | 377 MB | **89 MB, 1 process** |
-| RAM after a scan | — | 107 MB |
-| Full `C:\` scan | 172–299 s | **4.9 s** via MFT · 75 s walking |
-
-`apps/native` draws the same four regions — bar, summary, review list, quarantine — straight
-to the GPU. There is no browser runtime, which is the whole difference: the webview alone costs
-~316 MB before the app draws anything.
+- **9,557 lines** of Rust across the core, the CLI and the window.
+- **78 tests** (`cargo test --workspace`), including the invariants that keep deletion safe: exclusive
+  sizing never exceeds the tree, protection blocks its parent, excluded folders are never read.
+- **No async runtime.** Work runs on `std::thread` and results return over an `mpsc` channel.
+- The rules are **data, not code**, so the classifier is testable without a disk.
 
 ```bash
-cd apps/native
-cargo run --release                 # the window
-cargo run --release -- --scan       # scan immediately on open
-cargo run --release -- --selftest   # headless: scan, classify, print, exit
+cargo build --release              # the CLI
+cd apps/native && cargo build --release   # the window
+cargo test --workspace
 ```
 
-Purge is armed rather than immediate: the button reads "Purge all", then "Confirm: delete 12.4
-GB?" on the second click. Deleting staged data is the one action with no undo.
+## Privacy
 
-What it is not: egui's stock widgets do not match a hand-styled CSS interface pixel for pixel.
-The look is close — same palette, same rows, same tier colours — but it is a reimplementation.
-A cloud endpoint can be used instead, from the same panel: **off by default**, key held in memory for
-the session only, and the exact payload is shown before anything is sent. It has never been run
-against a live endpoint, so it is labelled unverified in the UI.
+No telemetry, no analytics, no network calls while scanning or cleaning. The scanner reads names and
+sizes; it never reads file contents.
 
-## What is not here yet
+The **local AI** panel talks to Ollama on `127.0.0.1`, so nothing leaves the machine. A **cloud
+endpoint** can be configured there instead — **off by default**, key held in memory for the session
+only, and a *Show what would be sent* button that prints the exact payload before anything is sent:
+folder path, size, file count and matched category. Never file names, never contents. That path has
+**never been tested against a live endpoint**, and the UI says so.
 
-- **Cloud AI, verified** — the client exists and is opt-in, but nobody has run it against a live
-  endpoint. Treat the transport as unproven, not the verdict ceiling
-- **Code signing** — the v0.2.0 binaries are unsigned, so SmartScreen warns once
+## Known limitations
 
-**Deliberately not planned:** removing `hiberfil.sys`, `pagefile.sys`, the Windows Update cache or
-`WinSxS`. They are reported as `LOCKED` but never touched — none of them can be deleted, only changed
-through `powercfg`, System Properties, a stopped service or `DISM`, so there is no undo and no
-quarantine to put them in.
+- **Windows only.** The scanner, path rules and executor are Win32-specific.
+- **Unsigned binaries.** SmartScreen warns once on every download.
+- **The cloud AI client is unverified.** The transport has never been exercised against a real
+  endpoint; verdicts are capped at `REVIEW` regardless.
+- **Multi-drive staging is unit-tested, not field-tested.** It routes to
+  `<volume>:\DriveSizeAuditQuarantine`; this machine has one volume, so no real cross-volume move has
+  been performed.
+- **No elevated tier.** `hiberfil.sys`, the Windows Update cache and `WinSxS` are reported `LOCKED`
+  and never touched — they cannot be deleted, only changed through `powercfg`, System Properties, a
+  stopped service or `DISM`, and none of that comes back.
+- **Purge is permanent.** Quarantine is the reversible step; the confirmation screen is the last one.
+- **Quarantine lives under `%APPDATA%`.** Deleting that folder, or uninstalling without checking it,
+  loses anything still staged there.
+- **One machine so far.** Windows 11 only, one GPU, one display scaling.
+- The mascot is **placeholder art** (AI renders), not final character work.
 
-The engine is complete enough to scan, classify, quarantine, restore and purge from either a
-terminal or a window.
+## Roadmap
 
-## Build
+1. **Code signing** — the only thing between downloadable and trustworthy.
+2. **A live test of the cloud client**, then either promote it or remove it.
+3. **Multi-drive proven** on a second physical volume.
 
-```bash
-cargo test                      # 73 tests (workspace)
-cargo build --release
-```
+Deliberately not planned: deleting `hiberfil.sys`, `pagefile.sys`, the Windows Update cache or
+`WinSxS`. Reported, never touched.
 
-Requires Rust (MSVC toolchain on Windows) and the Visual Studio Build Tools.
+## Contributing
 
-## Relationship to v1
+The most useful contribution is **a rule**, not code — the classifier is data. A misclassified folder
+is a `rules.json` bug, and the fix is a new rule *above* the general one it must outrank, plus a test
+that asserts both the folder it should match and the neighbouring folder it must not.
 
-v1 is not deprecated. It works, it has releases, and it is what people should use today. This
-repository will earn the name "v2" when it can scan, classify, quarantine and purge — not before.
+For the engine, the architecture, and the traps that already cost time once, read
+[AGENTS.md](AGENTS.md).
 
-MIT licensed.
+## License
+
+[MIT](LICENSE) © 2026 masterdorime
+
+**Use at your own risk.** This software moves and permanently deletes files. It is provided "as is",
+without warranty of any kind. Keep a backup of anything you cannot re-download, read the confirmation
+screen before you tick the box, and start with the `SAFE_PURGE` tier.

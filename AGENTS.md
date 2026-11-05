@@ -107,6 +107,7 @@ cargo run --release -- --pane quarantine         # open any pane directly
 cargo run --release -- --zoom "C:\...\npm-cache" # open the inspector on one folder
 cargo run --release -- --mood done                # force a mascot frame for a screenshot
 cargo run --release -- --tour                     # replay the guided tour
+cargo run --release -- --tour-demo                # advance a step every 2 s, for recording only
 cargo run --release -- --no-tour                  # skip it (scripted runs)
 ```
 
