@@ -5,8 +5,8 @@ anything; it records the invariants and the traps that already cost time once.
 
 **Companion repo (read its `AGENTS.md` for the full story):**
 `C:\Users\TRISTAN\drive size audit` → https://github.com/masterdorime/opendump — the Electron
-app that is still the shipped product (v0.5.0, 5 releases). This repo shipped **v0.1.0** on 2026-10-29 and **v0.1.1** on 2026-11-01, both
-unsigned windows-x64 zips, and still should not be handed to a user as their daily
+app that is still the shipped product (v0.5.0, 5 releases). This repo shipped **v0.1.0** on 2026-10-29, **v0.1.1** on 2026-11-01 and **v0.2.0** on 2026-11-05
+(unsigned windows-x64 zip and, from 0.2.0, a per-user installer), and still should not be handed to a user as their daily
 driver: there is no guided tour and no signed build.
 
 **Last updated:** 2026-10-29 · last code commit `1bfd9ca` (docs commits follow) · working tree
@@ -27,7 +27,7 @@ clean · CI green.
 
 | | |
 | --- | --- |
-| Version | 0.1.1, **released 2026-11-01** (`v0.1.1`, unsigned windows-x64 zip) |
+| Version | 0.2.0, **released 2026-11-05** (`v0.2.0`, unsigned zip + installer) |
 | Tests | **73** (`cargo test --workspace`) |
 | Lines | **7,865** Rust |
 | Binaries | `opendump.exe` 1.91 MB · `opendump-native.exe` 8.63 MB (9.05 MB on disk) |

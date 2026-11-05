@@ -51,7 +51,7 @@ and `purge` require explicit confirmation flags.
 **Requirements:** Windows 10 or 11, x64. Nothing else is bundled - the window
 talks to Win32 directly and there is no webview.
 
-- **To use a released build:** download `opendump-0.1.1-windows-x64.zip` from
+- **To use a released build:** download `opendump-0.2.0-windows-x64.zip` from
   [Releases](https://github.com/masterdorime/opendump-v2/releases), unzip it anywhere, and run
   `opendump.exe` or `opendump-native.exe`. Keep the `rules\` folder beside the executables — the
   CLI resolves `rules\rules.json` from there, and the window has the same file compiled in.
@@ -195,7 +195,7 @@ against a live endpoint, so it is labelled unverified in the UI.
 
 - **Cloud AI, verified** — the client exists and is opt-in, but nobody has run it against a live
   endpoint. Treat the transport as unproven, not the verdict ceiling
-- **Code signing** — the v0.1.1 binaries are unsigned, so SmartScreen warns once
+- **Code signing** — the v0.2.0 binaries are unsigned, so SmartScreen warns once
 
 **Deliberately not planned:** removing `hiberfil.sys`, `pagefile.sys`, the Windows Update cache or
 `WinSxS`. They are reported as `LOCKED` but never touched — none of them can be deleted, only changed
