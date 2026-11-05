@@ -235,17 +235,27 @@ cache already clean). Do not build it without a product reason stronger than com
 Rules) and multi-drive staging (`stage_root_for` — an item from another volume is staged at
 `<volume>:\DriveSizeAuditQuarantine`, because a move must be a rename).
 
-**Release recipe** (v0.1.1 shipped this way, 2026-11-01):
+**Release recipe** (v0.2.0 is the reference):
 
 ```bash
-cargo build --release                 # crates/opendump-cli + core
+cargo build --release                     # crates/opendump-cli + core
 cd apps/native && cargo build --release   # the window (own workspace!)
+cd ../.. && ./installer/build.ps1          # Inno Setup -> dist/*-setup.exe
 # stage: opendump.exe, opendump-native.exe, rules/rules.json, README.md, LICENSE
 # zip as opendump-<version>-windows-x64.zip, tag, gh release create
 ```
 
 The zip must contain `rules/rules.json` beside the exes — the CLI resolves it there, the window
 compiles the same file in with `include_str!`. A zip without it gives a rule-less CLI.
+
+The **installer** is `installer/opendump.iss`, compiled with Inno Setup 6 (`ISCC.exe`). It installs
+per-user into `%LOCALAPPDATA%\Programs\opendump` with `PrivilegesRequired=lowest` — the app never
+asks for admin, so the installer must not either. **Two traps already hit:**
+
+1. A `MsgBox` in `CurUninstallStepChanged` blocks `/SILENT` and `/VERYSILENT` unless it is guarded by
+   `not UninstallSilent`; an unattended uninstall hung on an invisible dialog.
+2. Uninstall deliberately removes **nothing** under `%APPDATA%\opendump-native`: staged folders
+   there have not been deleted yet, and an uninstaller must never decide that for the user.
 
 Already shipped and not to be rebuilt: treemap (`171017e`), meters (`502734b`), cache
 (`498bb04`), local AI (`80a484a`), inspection layer and rules editor (`d026648`), themes
