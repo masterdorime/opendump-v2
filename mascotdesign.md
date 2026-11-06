@@ -1,10 +1,16 @@
-# Mascot design — the disc girl
+# Mascot design — Kiroku-chan
 
-**Status:** character chosen from candidates (flat CD-girl sheet); app integration is built and
-running with a placeholder; **no final art yet**.
+**Status:** named **Kiroku-chan**; eight frames integrated and shipped in `v0.2.0`; **art is still
+placeholder** (AI renders, cut with `rembg`, 191 × 284, 1 px ink contour).
 **Target:** `apps/native` (v2, egui 0.29).
-**Working name:** none. The UI says `DRIVE GUIDE`; pick a name before the first real asset, because
-it lands in filenames and the settings key.
+**Name:** Kiroku (記録, *record*) — she is named after the journal, which is what makes the tool's
+deletions auditable. Short form: **Kiroku**. The UI labels stay functional (`DRIVE GUIDE`); the name
+lives in copy, the README and release notes. Code identifiers stay `mascot_*`, so renaming her again
+costs nothing.
+
+**Implemented since this spec was written:** the eight states, the guide card pinned in the right
+rail, the action-gated tour bubble (with mirroring and easing), the persisted hide toggle, and the
+Windows reduced-motion check. See `AGENTS.md` §9 for the file list.
 
 ---
 
