@@ -14,7 +14,7 @@
   <a href="#install"><img src="https://img.shields.io/badge/build-Rust-000000?logo=rust&logoColor=white" alt="Rust"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
   <a href="#install"><img src="https://img.shields.io/badge/platform-Windows%20x64-0078D6" alt="Windows x64"></a>
-  <a href="#install"><img src="https://img.shields.io/badge/download-10.9%20MB-lightgrey" alt="Download size"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/download-10.4%20MB-lightgrey" alt="Download size"></a>
   <a href="#built-in-rust"><img src="https://img.shields.io/badge/tests-78%20passing-brightgreen" alt="Tests"></a>
 </p>
 
@@ -23,7 +23,7 @@
 </p>
 
 > **Measured on one machine, not estimated:** a full `C:\` scan in **4.9 s** reading the NTFS MFT,
-> **89 MB** of RAM idle, **10.9 MB** to download, and **no runtime** — one binary, no webview.
+> **≈120 MB** of RAM idle, **10.4 MB** to download, and **no runtime** — one binary, no webview.
 
 `Get-ChildItem -Recurse` on 400 GB takes ten minutes and tells you nothing actionable. This tells you
 what is on the drive, what it is, whether it comes back if you delete it — and then refuses to delete
@@ -175,8 +175,8 @@ Three workspaces, one binary each, no runtime and no webview.
 | | v0.5 (Electron) | this |
 | --- | --- | --- |
 | Full `C:\` scan | 172–299 s | **4.9 s** reading the NTFS MFT (elevated); ~75 s walking |
-| Idle RAM | 377 MB, 4 processes | **89 MB, 1 process** |
-| Download | 116.6 MB installer | **10.9 MB** exe, 5.8 MB installer |
+| Idle RAM | 377 MB, 4 processes | **≈120 MB, 1 process** |
+| Download | 116.6 MB installer | **10.4 MB** exe, 5.6 MB installer |
 | Runtime | Chromium + Node | **none** |
 
 The scan is why the rewrite exists. Walking 1.7 million files is a filesystem problem, and reading
@@ -184,7 +184,7 @@ the **Master File Table** directly is a native-code problem: one bulk read of th
 instead of hundreds of thousands of directory calls.
 
 A webview was tried and **deleted**: a Tauri shell produced a 9.98 MB exe but pulled **316 MB of
-WebView2** at runtime to draw one window that egui already drew in 10.9 MB with no runtime at all.
+WebView2** at runtime to draw one window that egui already drew in 10.4 MB with no runtime at all.
 
 The rest of the receipts:
 
