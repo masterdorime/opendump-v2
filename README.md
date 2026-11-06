@@ -1,13 +1,26 @@
-# opendump
+<p align="center">
+  <img src="docs/logo.png" width="116" alt="opendump">
+</p>
 
-**A disk audit that explains itself.** Scan a Windows drive, see every folder sized and classified
-by how safe it is to remove — one row, one reason, one checkbox at a time.
+<h1 align="center">opendump</h1>
 
-[![Rust](https://img.shields.io/badge/built%20with-Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Windows](https://img.shields.io/badge/platform-Windows%20x64-0078D6)](#install)
-[![Download](https://img.shields.io/badge/download-10.9%20MB-lightgrey)](#install)
-[![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen)](#built-in-rust)
+<p align="center">
+  <strong>A disk audit that explains itself.</strong><br>
+  Sizes every folder on a Windows drive and tells you what is safe to remove —<br>
+  one row, one reason, one checkbox at a time.
+</p>
+
+<p align="center">
+  <a href="#install"><img src="https://img.shields.io/badge/build-Rust-000000?logo=rust&logoColor=white" alt="Rust"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/platform-Windows%20x64-0078D6" alt="Windows x64"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/download-10.9%20MB-lightgrey" alt="Download size"></a>
+  <a href="#built-in-rust"><img src="https://img.shields.io/badge/tests-78%20passing-brightgreen" alt="Tests"></a>
+</p>
+
+<p align="center">
+  <img src="docs/map.png" alt="opendump's treemap, coloured by risk tier, with the drive inspector open" width="100%">
+</p>
 
 > **Measured on one machine, not estimated:** a full `C:\` scan in **4.9 s** reading the NTFS MFT,
 > **89 MB** of RAM idle, **10.9 MB** to download, and **no runtime** — one binary, no webview.
@@ -45,8 +58,7 @@ anything until you say so twice.
 - **Purges** only on a second, explicit confirmation that names the folders and the bytes.
 
 <p align="center">
-  <img src="docs/map.png" width="49%" alt="The treemap, coloured by risk tier, with the drive inspector open">
-  <img src="docs/review.png" width="49%" alt="The review list: every candidate with its reason and size">
+  <img src="docs/review.png" alt="The review list: every candidate with its reason and size" width="100%">
 </p>
 
 Rules decide. Nothing else does — not a heuristic, not a language model.
